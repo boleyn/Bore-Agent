@@ -27,6 +27,7 @@ RUN if [ -n "${NPM_REGISTRY}" ]; then npm config set registry "${NPM_REGISTRY}";
 FROM base AS deps
 ARG NPM_REGISTRY=https://registry.npmmirror.com
 COPY package.json bun.lock ./
+COPY patches ./patches
 RUN apk add --no-cache python3 \
   && if [ -n "${NPM_REGISTRY}" ]; then npm config set registry "${NPM_REGISTRY}"; fi \
   && bun install --frozen-lockfile
