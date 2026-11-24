@@ -34,8 +34,13 @@ export const createMcpPlugin = (configs: McpServerConfig[]): AgentPlugin => ({
   async setup(context) {
     const manager = new McpClientManager();
     context.onDispose(() => manager.closeAll());
-    const registry = new ToolRegistry();
-    await manager.connectAll(configs, registry);
-    for (const tool of registry.list()) context.registerTool(tool);
+    for (const config of configs) {
+      const label = config.transport === "stdio" ? config.name : config.displayName || config.name;
+      context.registerSource(config.name, label, async () => {
+        const registry = new ToolRegistry();
+        await manager.connect(config, registry);
+        for (const tool of registry.list()) context.registerTool(tool);
+      });
+    }
   },
 });

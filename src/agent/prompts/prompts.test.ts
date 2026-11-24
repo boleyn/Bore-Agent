@@ -58,3 +58,14 @@ test("changing attachments, memories and file lists does not change system prefi
   const initial = { ...context, toolNames: new Set(["Read", "Skill"]) };
   expect(buildSystemPrompt(initial)).toBe(buildSystemPrompt({ ...initial, memoryBlock: "new memory", currentAttachments: ["new.pdf"], projectFilePaths: ["/new.ts"] }));
 });
+
+test("introduces Bore in the user's cloud computer project", () => {
+  const prompt = buildSystemPrompt({
+    ...context,
+    sandboxKind: "remote-vm",
+    toolNames: new Set(["Bash"]),
+  });
+  expect(prompt).toContain("You are Bore");
+  expect(prompt).toContain("active project directory on the user's cloud computer");
+  expect(prompt).not.toContain("DeviceBash");
+});

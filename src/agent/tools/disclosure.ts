@@ -1,5 +1,5 @@
 import type { ToolContext, ToolDefinition } from "./types";
-import { rankTools } from "./search";
+import { searchTools } from "./semanticSearch";
 import { ToolRegistry } from "./registry";
 
 // Keep wire schemas stable. Deferred schemas travel in tool results, never at
@@ -19,22 +19,26 @@ export function createToolDisclosure(registry: ToolRegistry, access: Pick<ToolCo
   const searchable = () => registry.available(access).filter((tool) => !CORE.has(tool.name));
   const search: ToolDefinition<{ query: string; toolset?: string; limit?: number }> = {
     name: "search_tools", toolset: "discovery", readOnly: true,
-    description: "Discover tools by task, exact name, or capability/toolset. Empty query lists capability groups. Returns full schemas for up to 5 matching tools; invoke them with call_dynamic_tool. Search again if results are unrelated.",
+    description: "Discover tools by task, exact name, or capability/toolset. Empty query lists capability groups and plugin sources. Supply a source ID in toolset to discover its tools; use an empty query to browse. Returns full schemas for up to 5 matching tools; invoke them with call_dynamic_tool. Search again if results are unrelated.",
     parameters: { type: "object", properties: {
       query: { type: "string" }, toolset: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 5 },
     }, required: ["query"] },
-    async handler(args) {
+    async handler(args, ctx) {
+      const sources = access.isSubagent ? [] : registry.sourceManifest();
+      const source = sources.find(item => item.id === args.toolset || item.label.toLowerCase() === args.toolset?.toLowerCase()
+        || String(args.query).startsWith(`mcp__${item.id}__`));
+      if (source) await registry.loadSource(source.id);
       const all = searchable();
       if (!String(args.query || "").trim() && !args.toolset) {
         const groups = new Map<string, number>();
         for (const tool of all) groups.set(tool.toolset, (groups.get(tool.toolset) || 0) + 1);
-        return { content: JSON.stringify({ capabilities: [...groups].sort().map(([name, count]) => ({ name, count })) }) };
+        return { content: JSON.stringify({ sources, capabilities: [...groups].sort().map(([name, count]) => ({ name, count })) }) };
       }
       const query = String(args.query || "").toLowerCase();
-      const candidates = all.filter(tool => !args.toolset || tool.toolset === args.toolset);
-      const ranked = query ? rankTools(candidates, query) : candidates.map(tool => ({ tool, score: 1 }));
+      const candidates = all.filter(tool => source ? tool.name.startsWith(`mcp__${source.id}__`) : !args.toolset || tool.toolset === args.toolset);
+      const ranked = query ? await searchTools(candidates, query, ctx.signal) : candidates.map(tool => ({ tool, score: 1 }));
       const limit = Math.max(1, Math.min(5, Math.floor(Number(args.limit) || 5)));
-      return { content: JSON.stringify({ matches: ranked.slice(0, limit).map(({ tool }) => ({ name: tool.name, toolset: tool.toolset, description: tool.description, parameters: tool.parameters, ...(tool.instructionSkills?.length ? { instructionSkills: tool.instructionSkills } : {}) })), total: ranked.length }) };
+      return { content: JSON.stringify({ ...(!source && sources.length ? { sources } : {}), matches: ranked.slice(0, limit).map(({ tool }) => ({ name: tool.name, toolset: tool.toolset, description: tool.description, parameters: tool.parameters, ...(tool.instructionSkills?.length ? { instructionSkills: tool.instructionSkills } : {}) })), total: ranked.length }) };
     },
   };
   exposed.register(search);

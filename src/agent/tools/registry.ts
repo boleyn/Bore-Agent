@@ -14,6 +14,24 @@ export class ToolRegistry {
   private readonly schemas = new Map<string, ValidateFunction>();
   private readonly tools = new Map<string, ToolDefinition<any>>();
 
+  private readonly sources = new Map<string, { label: string; load: () => Promise<void> }>();
+
+  registerSource(id: string, label: string, load: () => Promise<void>) {
+    let pending: Promise<void> | undefined;
+    this.sources.set(id, { label, load: () => pending ??= load().catch(error => {
+      pending = undefined;
+      throw error;
+    }) });
+  }
+
+  sourceManifest() {
+    return [...this.sources].map(([id, source]) => ({ id, label: source.label }));
+  }
+
+  async loadSource(id: string) {
+    await this.sources.get(id)?.load();
+  }
+
   register<I>(tool: ToolDefinition<I>): void {
     if (this.get(tool.name)) throw new Error(`Duplicate tool: ${tool.name}`);
     this.tools.set(tool.name, tool as ToolDefinition<any>);
@@ -55,6 +73,13 @@ export class ToolRegistry {
   }
 
   async dispatch(name: string, rawArgs: string | Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
+    if (!this.get(name) && name.startsWith("mcp__") && !ctx.isSubagent && !ctx.signal?.aborted) {
+      try {
+        await this.loadSource(name.split("__")[1]);
+      } catch (error) {
+        return { content: String(error), isError: true };
+      }
+    }
     const tool = this.get(name);
     if (!tool) return { content: `Unknown tool: ${name}. Search for an available tool, then correct the call.`, isError: true };
     if (ctx.signal?.aborted) return { content: "Tool call cancelled.", isError: true };

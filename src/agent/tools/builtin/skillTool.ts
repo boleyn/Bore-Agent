@@ -6,7 +6,7 @@ export const SkillTool = defineTool<{ skill: string; args?: string; resource?: s
   toolset: "skills",
   readOnly: true,
   description:
-    "Load a skill's full instructions (SKILL.md) from /skills or /.aistudio/skills by name. " +
+    "Load a skill's full instructions (SKILL.md) from the current conversation's skill catalog by name. " +
     "Pass skill='list' to inspect skills (query and offset/limit supported). Loading returns reference filenames; use resource to read a selected reference with offset/limit.",
   parameters: {
     type: "object",
@@ -33,7 +33,7 @@ export const SkillTool = defineTool<{ skill: string; args?: string; resource?: s
       return { content: `Reference ${requested}/${input.resource}; ${lines.length} lines\n` + lines.slice(offset, offset + limit).map((line, index) => `${offset + index + 1}: ${line.slice(0, 2000)}`).join("\n") };
     }
     if (!requested || requested.toLowerCase() === "list") {
-      if (skills.length === 0) return { content: "No skills installed in /skills or /.aistudio/skills." };
+      if (skills.length === 0) return { content: "No skills are available in this conversation." };
       return {
         content: skills.filter(s => !input.query || `${s.name} ${s.description}`.toLowerCase().includes(input.query.toLowerCase())).slice(offset, offset + limit).map((s) => `- ${s.name}${s.description ? `: ${s.description}` : ""} (${s.path})`).join("\n"),
       };

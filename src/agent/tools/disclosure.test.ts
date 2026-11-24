@@ -49,3 +49,20 @@ test("discovered tool arguments are validated before execution", async () => {
   const found = JSON.parse((await exposed.dispatch("search_tools", { query: "查询发票" }, context)).content);
   expect(found.matches[0].name).toBe("invoice");
 });
+
+test("overview stays offline and parallel scoped searches load one source once", async () => {
+  const registry = new ToolRegistry();
+  let connections = 0;
+  registry.registerSource("books", "Library", async () => {
+    connections++;
+    registry.register({ name: "mcp__books__find", description: "Find books", toolset: "mcp",
+      readOnly: true, parameters: { type: "object", properties: {} }, handler: async () => ({ content: "found" }) });
+  });
+  const exposed = createToolDisclosure(registry, context);
+  const search = (args: Record<string, string>) => exposed.dispatch("search_tools", args, context);
+  expect(JSON.parse((await search({ query: "" })).content).sources[0].id).toBe("books");
+  expect(connections).toBe(0);
+  const results = await Promise.all([search({ query: "", toolset: "books" }), search({ query: "find", toolset: "books" })]);
+  expect(connections).toBe(1);
+  for (const result of results) expect(JSON.parse(result.content).matches[0].name).toBe("mcp__books__find");
+});

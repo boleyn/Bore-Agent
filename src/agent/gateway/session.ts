@@ -33,7 +33,7 @@ import {
   type ProjectFiles,
   type SandboxKind,
 } from "../sandbox";
-import { getDisabledBuiltinSkillTokens, getSelectedBuiltinSkills, getSelectedCustomSkills } from "@/server/skills/store";
+import { getDisabledBuiltinSkillTokens, getEnabledBuiltinSkills, getSelectedCustomSkills } from "@/server/skills/store";
 import { createSkillCatalog } from "../skills/catalog";
 import { getContextWindowForModel } from "../app/context";
 import { runAgentLoop } from "../app/agentLoop";
@@ -259,7 +259,7 @@ export async function runAgentSession(
     const skills = createSkillCatalog(
       sandbox,
       [...plugins.skills, ...instructionSkills],
-      [...getSelectedBuiltinSkills(input.selectedSkills), ...getSelectedCustomSkills(input.selectedSkills)],
+      [...getSelectedCustomSkills(input.selectedSkills), ...getEnabledBuiltinSkills(disabledBuiltinSkillTokens)],
       excludedBuiltinSkillPaths,
     );
     const [availableSkills, memoryBlock] = await Promise.all([
@@ -283,6 +283,22 @@ export async function runAgentSession(
     };
     const systemPrompt = buildSystemPrompt(promptContext) + (input.isSubagent ? "\n" + roleInstructions[delegationRole(input.subagentRole, permissionMode)] : "");
     let turnContext = buildTurnContext(promptContext);
+    const groups = [...new Set(plugins.registry.available({ sandbox, permissionMode, projectToken: input.token, isSubagent: input.isSubagent }).map(tool => tool.toolset))].sort();
+    const sources = plugins.registry.sourceManifest();
+    turnContext += "\nAvailable tool groups: " + groups.join(", ");
+    if (sources.length) turnContext += "\nExternal plugins (use search_tools with toolset=id): " + JSON.stringify(sources);
+    if (toolNames.has("Skill")) {
+      let remaining = 12000;
+      for (const name of new Set(promptContext.selectedSkills)) {
+        if (remaining <= 0) break;
+        const loaded = await skills.load(name);
+        if (!loaded) continue;
+        const body = loaded.content.slice(0, remaining);
+        remaining -= body.length;
+        turnContext += "\nSelected skill instructions: " + JSON.stringify({ name, body, references: loaded.references,
+          ...(body.length < loaded.content.length ? { continuation: "Load the full instructions with Skill." } : {}) });
+      }
+    }
     if (goal) turnContext += "\nCurrent goal: " + JSON.stringify(goal.objective);
     const taskStore = new AgentTaskStore(`${input.userId || "local"}:${input.token}:${input.chatId}`);
     const tasks = input.isSubagent ? [] : await taskStore.list();

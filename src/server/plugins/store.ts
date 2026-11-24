@@ -92,6 +92,7 @@ export function listImportedMcpConfigs(ownerId?: string): McpServerConfig[] {
     const token = String(plugin.configValues?.apiKey ?? "").trim();
     return [{
       name: plugin.id,
+      displayName: plugin.name,
       transport: "http",
       url,
       userImported: true,

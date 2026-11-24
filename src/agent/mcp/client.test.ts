@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
-import { McpClientManager } from "./client";
-import { ToolRegistry } from "../tools/registry";
+import { createMcpPlugin } from "../plugins/builtins";
+import { PluginRuntime } from "../plugins/runtime";
+import { createToolDisclosure } from "../tools/disclosure";
 import type { ToolContext } from "../tools/types";
 
 test("MCP discovery handles pages, preserves schema and dispatches real HTTP calls", async () => {
@@ -51,19 +52,16 @@ test("MCP discovery handles pages, preserves schema and dispatches real HTTP cal
       return Response.json({ jsonrpc: "2.0", id: message.id, result });
     },
   });
-  const manager = new McpClientManager();
+  const runtime = await PluginRuntime.create([createMcpPlugin([{
+    name: "fixture", transport: "http", url: `http://127.0.0.1:${server.port}/mcp`,
+  }])], {});
   try {
-    const registry = new ToolRegistry();
-    await manager.connectAll(
-      [
-        {
-          name: "fixture",
-          transport: "http",
-          url: `http://127.0.0.1:${server.port}/mcp`,
-        },
-      ],
-      registry,
-    );
+    const registry = runtime.registry;
+    const context = { permissionMode: "plan" } as ToolContext;
+    const discovery = createToolDisclosure(registry, context);
+    await discovery.dispatch("search_tools", { query: "" }, context);
+    expect(seen).toEqual([]);
+    await discovery.dispatch("search_tools", { query: "first", toolset: "fixture" }, context);
     expect(registry.list().map((tool) => tool.name)).toEqual([
       "mcp__fixture__first",
       "mcp__fixture__second",
@@ -79,7 +77,7 @@ test("MCP discovery handles pages, preserves schema and dispatches real HTTP cal
     expect(result.content).toBe("from second page");
     expect(seen.filter((method) => method === "tools/list")).toHaveLength(2);
   } finally {
-    await manager.closeAll();
+    await runtime.dispose();
     server.stop(true);
   }
 });

@@ -54,3 +54,18 @@ test("successive compactions preserve a previous user constraint even when summa
   expect(two.messages[0].content).toContain(constraint);
   expect(two.messages.at(-1)?.content).toBe("Continue.");
 });
+
+test("completed discovery can be recovered while the current user request stays intact", async () => {
+  const content = "detailed schema ".repeat(3000);
+  const messages: ChatCompletionMessageParam[] = [
+    { role: "user", content: "Find the tool" },
+    { role: "assistant", content: null, tool_calls: [{ id: "search", type: "function", function: { name: "search_tools", arguments: "{}" } }] },
+    { role: "tool", tool_call_id: "search", content },
+    { role: "assistant", content: "Found it." },
+    { role: "user", content: "New task" },
+  ];
+  const result = await compressContextIfNeeded({ ...base, messages });
+  expect(result.messages[2].content).toContain("Earlier discovery result archived");
+  expect([...stored.values()]).toContain(content);
+  expect(result.messages.at(-1)).toEqual(messages.at(-1));
+});

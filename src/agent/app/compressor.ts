@@ -20,7 +20,29 @@ export async function compressContextIfNeeded(params: {
   const limits = contextLimits(params.maxContext);
   const count = (messages: ChatCompletionMessageParam[]) => requestTokens(params.systemPrompt, params.tools, messages);
   const groups = conversationGroups(params.messages);
-  if (count(params.messages) <= limits.input) return { messages: params.messages, compacted: false };
+  const used = count(params.messages);
+  if (used <= limits.target) return { messages: params.messages, compacted: false };
+
+  // Once there is pressure, reclaim large discovery results from completed turns.
+  // Keep the active turn and all tool call/result pairs intact.
+  const lastUserIndex = params.messages.reduce((last, message, index) => message.role === "user" ? index : last, -1);
+  const reloadable = new Set<string>();
+  const cleared = params.messages.slice();
+  for (let index = 0; index < lastUserIndex; index++) {
+    const message = cleared[index];
+    if (message.role === "assistant") {
+      for (const call of message.tool_calls || []) {
+        if (call.type === "function" && ["Skill", "search_tools"].includes(call.function.name)) reloadable.add(call.id);
+      }
+    } else if (message.role === "tool" && reloadable.has(message.tool_call_id)
+      && typeof message.content === "string" && message.content.length > 2000) {
+      const archive = await params.artifacts.save(message.content);
+      cleared[index] = { ...message, content: `Earlier discovery result archived at ${archive}. Read it by range, or repeat discovery for current information.` };
+    }
+  }
+  if (cleared.some((message, index) => message !== params.messages[index]) && count(cleared) <= limits.input)
+    return { messages: cleared, compacted: true };
+  if (used <= limits.input) return { messages: params.messages, compacted: false };
   if (params.signal?.aborted) throw new Error("请求已取消");
 
   // Archive before changing any observation; storage failure preserves the original.

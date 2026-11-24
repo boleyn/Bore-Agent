@@ -46,6 +46,7 @@ export class PluginRuntime {
           throw new Error(`Plugin ${id} requires: ${missing.join(", ")}`);
         const contributedTools: string[] = [];
         await plugin.setup({
+          registerSource: (id, label, load) => runtime.registry.registerSource(id, label, load),
           registerSkill: ({ name, content, tools, resources }) => {
             if (!/^[a-z0-9][a-z0-9-]*$/.test(name))
               throw new Error(`Invalid plugin skill: ${name}`);

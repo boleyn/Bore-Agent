@@ -19,10 +19,14 @@ const tokenize = (text: string): string[] => {
 export function rankTools(tools: ToolDefinition<any>[], query: string) {
   const expanded = `${query} ${aliases.filter(([re]) => re.test(query)).map(([, terms]) => terms).join(" ")}`;
   const terms = [...new Set(tokenize(expanded))];
-  const documents = tools.map(tool => ({ tool, words: tokenize(`${tool.name} ${tool.toolset} ${tool.description}`) }));
+  const documents = tools.map(tool => {
+    const fields = Object.keys(tool.parameters.properties || {}).join(" ");
+    const words = tokenize(`${tool.name} ${tool.toolset} ${tool.description} ${fields} ${(tool.instructionSkills || []).join(" ")}`);
+    return { tool, words, nameTerms: new Set(tokenize(tool.name)) };
+  });
   const averageLength = documents.reduce((sum, doc) => sum + doc.words.length, 0) / Math.max(1, documents.length);
   const frequency = new Map(terms.map(term => [term, documents.filter(doc => doc.words.includes(term)).length]));
-  return documents.map(({ tool, words }) => {
+  return documents.map(({ tool, words, nameTerms }) => {
     let score = tool.name.toLowerCase() === query.trim().toLowerCase() ? 1000 : 0;
     for (const term of terms) {
       const tf = words.filter(word => word === term).length;
@@ -30,7 +34,7 @@ export function rankTools(tools: ToolDefinition<any>[], query: string) {
       const df = frequency.get(term) || 0;
       const idf = Math.log(1 + (tools.length - df + 0.5) / (df + 0.5));
       score += idf * tf * 2.2 / (tf + 1.2 * (0.25 + 0.75 * words.length / Math.max(1, averageLength)));
-      if (tokenize(tool.name).includes(term)) score += 2;
+      if (nameTerms.has(term)) score += 2;
     }
     return { tool, score };
   }).filter(({ score }) => score > 0).sort((a, b) => b.score - a.score || a.tool.name.localeCompare(b.tool.name));

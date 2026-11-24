@@ -21,6 +21,7 @@ export type McpServerConfig =
       url: string;
       headers?: Record<string, string>;
       userImported?: boolean;
+      displayName?: string;
     };
 
 /**
@@ -51,7 +52,7 @@ export class McpClientManager {
     registry: ToolRegistry,
   ): Promise<void> {
     const client = new Client({
-      name: "aistudio-hermes-agent",
+      name: "bore-agent",
       version: "1.0.0",
     });
     const imported = cfg.transport !== "stdio" && cfg.userImported

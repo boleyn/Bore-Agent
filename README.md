@@ -47,7 +47,7 @@ Bore Agent 采用 **Hermes Agent** 的工具注册、插件贡献、技能渐进
 ```mermaid
 flowchart LR
     User["用户浏览器 / 桌面端"] -->|HTTPS / SSE| Web["Agent 网关与前端页面 (bore-agent)"]
-    Web -->|Gateway 编排| Agent["Hermes Agent (app / tools / plugins / skills)"]
+    Web -->|Gateway 编排| Agent["Bore Agent (app / tools / plugins / skills)"]
     Agent -->|MCP / LLM API| LLM["模型服务 (AIProxy / OpenAI 兼容)"]
     Agent -->|"remote-vm (HTTP Exec)"| Sandbox["云主机沙盒 (agent-sandbox)"]
     Agent -->|WS/WSS 长连接 + 本机授权| Local["本地电脑客户端 (local-device)"]
@@ -60,7 +60,7 @@ flowchart LR
 
 | 组件 / 目录 | 形态 | 职责说明 |
 | --- | --- | --- |
-| **Agent 网关与前端页面（`bore-agent`）** | Next.js 全栈服务（Node.js 24 + Bun） | 提供对话页面、模型管理、项目管理、Agent 网关 API 与 Hermes Agent 核心运行循环（`src/agent/`）。 |
+| **Agent 网关与前端页面（`bore-agent`）** | Next.js 全栈服务（Node.js 24 + Bun） | 提供对话页面、模型管理、项目管理、Agent 网关 API 与 Bore Agent 核心运行循环（`src/agent/`）。 |
 | **远端沙盒（`agent-sandbox`）** | Docker 容器服务（`projects/agent-sandbox/`） | 基于容器与 HTTP Exec Server（`exec-server.ts`）提供隔离的命令执行与文件同步环境，支持工作区快照与 S3 持久化。 |
 | **本地电脑客户端（`local-device`）** | Go 桌面托盘应用（`projects/local-device/`） | 支持 macOS / Windows，主动通过 WS/WSS 连接工作台，将个人电脑安全接入，每次执行需在本机弹窗授权并选择工作目录。 |
 | **本机目录连接器（`agent-connector`）** | 轻量服务端（`projects/agent-connector/`） | 将本机指定目录直接挂载为智能体工作区。 |

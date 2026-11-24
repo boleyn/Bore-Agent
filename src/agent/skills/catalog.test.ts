@@ -44,3 +44,23 @@ test("excluded built-in paths cannot be loaded from a persistent workspace", asy
   expect(await catalog.list()).toEqual([]);
   expect(await catalog.load("disabled")).toBeUndefined();
 });
+
+test("cloud projects can load enabled bundled skills without scanning legacy directories", async () => {
+  const visited: string[] = [];
+  const sandbox = { fs: {
+    readdir: async (directory: string) => {
+      visited.push(directory);
+      throw new Error("Project does not have a skills directory");
+    },
+  } } as unknown as Sandbox;
+  const catalog = createSkillCatalog(sandbox, [], [{
+    name: "plugin-creator",
+    description: "Build a plugin",
+    path: "builtin:plugin-creator/SKILL.md",
+    content: "Plugin creator instructions",
+  }]);
+
+  expect((await catalog.list()).map(skill => skill.name)).toEqual(["plugin-creator"]);
+  expect((await catalog.load("plugin-creator"))?.content).toBe("Plugin creator instructions");
+  expect(new Set(visited)).toEqual(new Set(["/skills"]));
+});

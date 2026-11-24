@@ -42,9 +42,7 @@ export type SkillSnapshot = {
 let snapshotCache: SkillSnapshot | null = null;
 
 const toPosix = (input: string) => input.split(path.sep).join("/");
-const getProjectSkillsRoot = () => path.join(process.cwd(), ".aistudio", "skills");
 const getBuiltinSkillsRoot = () => path.join(process.cwd(), "skills");
-type SkillSourcePrefix = "/.aistudio/skills" | "/skills";
 type SkillFs = { readdir: (target: string) => Promise<Dirent[]>; readFile: (target: string, options: { encoding: "utf8" }) => Promise<string> };
 
 // The global catalog contains bundled skills only. Project skills are read from
@@ -61,19 +59,17 @@ const toRootRelativeSkillPath = (input: string, skillsRoot: string) => {
 };
 const toSkillDisplayPath = (
   input: string,
-  skillsRoot: string,
-  sourcePrefix: SkillSourcePrefix = "/.aistudio/skills"
+  skillsRoot: string
 ) => {
   const relative = toRootRelativeSkillPath(input, skillsRoot);
-  if (relative === "/") return sourcePrefix;
-  return `${sourcePrefix}${relative}`.replace(/\/{2,}/g, "/");
+  if (relative === "/") return "/skills";
+  return `/skills${relative}`.replace(/\/{2,}/g, "/");
 };
 
 const buildRuntimeSkill = (
   skillFile: string,
   markdown: string,
-  skillsRoot: string,
-  sourcePrefix: SkillSourcePrefix
+  skillsRoot: string
 ): RuntimeSkill => {
   const frontmatter = parseSkillFrontmatter(markdown);
   const skillDir = path.dirname(skillFile);
@@ -86,9 +82,9 @@ const buildRuntimeSkill = (
     license: frontmatter.license || undefined,
     compatibility: frontmatter.compatibility || undefined,
     metadata: frontmatter.metadata,
-    location: toSkillDisplayPath(skillFile, skillsRoot, sourcePrefix),
+    location: toSkillDisplayPath(skillFile, skillsRoot),
     relativeLocation: toRootRelativeSkillPath(skillFile, skillsRoot),
-    baseDir: toSkillDisplayPath(skillDir, skillsRoot, sourcePrefix),
+    baseDir: toSkillDisplayPath(skillDir, skillsRoot),
     baseDirFsPath: toPosix(skillDir),
     body: markdown,
   };
@@ -108,11 +104,9 @@ const scanProjectSkills = async (): Promise<SkillSnapshot> => {
   const entries: SkillEntry[] = [];
   const skills: RuntimeSkill[] = [];
   const duplicateNames: Record<string, string[]> = {};
-  const roots: Array<{ root: string; prefix: SkillSourcePrefix; fs: SkillFs }> = [
-    { root: builtinSkillsRoot, prefix: "/skills", fs: nativeSkillFs },
-  ];
+  const roots = [{ root: builtinSkillsRoot, fs: nativeSkillFs }];
 
-  for (const { root, prefix, fs } of roots) {
+  for (const { root, fs } of roots) {
     let dirEntries: string[] = [];
     try {
       const listed = await fs.readdir(root);
@@ -131,14 +125,14 @@ const scanProjectSkills = async (): Promise<SkillSnapshot> => {
         entries.push({
           name: item,
           description: "",
-          location: toSkillDisplayPath(skillFile, root, prefix),
+          location: toSkillDisplayPath(skillFile, root),
           relativeLocation: toRootRelativeSkillPath(skillFile, root),
           isLoadable: false,
           issues: [
             {
               code: "missing_skill_file",
               message: "SKILL.md 不存在",
-              location: toSkillDisplayPath(skillFile, root, prefix),
+              location: toSkillDisplayPath(skillFile, root),
               name: item,
             },
           ],
@@ -146,7 +140,7 @@ const scanProjectSkills = async (): Promise<SkillSnapshot> => {
         continue;
       }
 
-      const skill = buildRuntimeSkill(skillFile, markdown, root, prefix);
+      const skill = buildRuntimeSkill(skillFile, markdown, root);
       const issues: SkillIssue[] = [];
       if (!skill.name.trim()) {
         issues.push({
@@ -210,7 +204,6 @@ export const getRuntimeSkillByName = async (name: string) => {
 
 export const sampleSkillFiles = async (skill: RuntimeSkill, limit = 10): Promise<string[]> => {
   const fs = nativeSkillFs;
-  const projectSkillsRoot = getProjectSkillsRoot();
   const builtinSkillsRoot = getBuiltinSkillsRoot();
   const listBaseDir = skill.baseDirFsPath || skill.baseDir;
   const boundedLimit = Math.max(1, Math.min(limit, 30));
@@ -219,16 +212,7 @@ export const sampleSkillFiles = async (skill: RuntimeSkill, limit = 10): Promise
     const entries = await fs.readdir(listBaseDir);
     for (const entry of entries) {
       if (entry.isFile()) {
-        const normalizedBase = toPosix(path.resolve(listBaseDir));
-        const builtinRoot = toPosix(path.resolve(builtinSkillsRoot));
-        const sourcePrefix: SkillSourcePrefix = normalizedBase.startsWith(builtinRoot)
-          ? "/skills"
-          : "/.aistudio/skills";
-        const rootForDisplay =
-          sourcePrefix === "/skills"
-            ? builtinSkillsRoot
-            : projectSkillsRoot;
-        files.push(toSkillDisplayPath(path.join(listBaseDir, entry.name), rootForDisplay, sourcePrefix));
+        files.push(toSkillDisplayPath(path.join(listBaseDir, entry.name), builtinSkillsRoot));
       }
       if (files.length >= boundedLimit) break;
     }

@@ -54,7 +54,7 @@ export const WebFetchTool = defineTool<{ url: string; prompt?: string }>({
     try {
       const response = await fetch(parsed.toString(), {
         signal: controller.signal,
-        headers: { "user-agent": "AIStudio-HermesAgent/1.0" },
+        headers: { "user-agent": "Bore-Agent/1.0" },
       });
       if (!response.ok) {
         return { content: `HTTP ${response.status} ${response.statusText}`, isError: true };

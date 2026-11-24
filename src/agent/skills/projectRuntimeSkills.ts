@@ -26,10 +26,7 @@ export const collectProjectRuntimeSkills = (
 
   const skillFiles = Object.entries(files || {}).filter(([filePath]) => {
     const normalized = toPosix(filePath || "").replace(/^\/+/, "");
-    return (
-      /^skills\/[^/]+\/SKILL\.md$/i.test(normalized) ||
-      /^\.?aistudio\/skills\/[^/]+\/SKILL\.md$/i.test(normalized)
-    );
+    return /^skills\/[^/]+\/SKILL\.md$/i.test(normalized);
   });
 
   for (const [filePath, file] of skillFiles) {

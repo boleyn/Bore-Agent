@@ -15,6 +15,7 @@ export type AgentPlugin = {
 };
 
 export type PluginContext = {
+  registerSource: (id: string, label: string, load: () => Promise<void>) => void;
   registerSkill: (skill: { name: string; content: string; tools?: string[]; resources?: Record<string, string> }) => void;
   registerPrompt: (
     render: (toolNames: ReadonlySet<string>) => string | undefined,

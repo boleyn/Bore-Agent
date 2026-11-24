@@ -105,12 +105,9 @@ export function getDisabledBuiltinSkillTokens(): ReadonlySet<string> {
   return new Set(readStoredState().disabledTokens);
 }
 
-export function getSelectedBuiltinSkills(names: readonly string[]) {
-  if (names.length === 0) return [];
-  const requested = new Set(names.map((name) => name.trim().toLowerCase()));
-  const disabled = getDisabledBuiltinSkillTokens();
+export function getEnabledBuiltinSkills(disabled = getDisabledBuiltinSkillTokens()) {
   return readBuiltinSkills().flatMap((skill) => {
-    if (disabled.has(skill.token) || !requested.has(skill.name.toLowerCase())) return [];
+    if (disabled.has(skill.token)) return [];
     const directory = path.join(WORKSPACE_SKILLS_DIR, skill.token);
     const resources: Record<string, string> = {};
     for (const folder of ["references", "scripts", "agents"]) {
