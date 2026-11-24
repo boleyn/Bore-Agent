@@ -24,10 +24,10 @@ function sourceLabel(item:LibraryFile) {
   return item.kind === "生成" ? "会话生成的文件" : item.kind;
 }
 
-export default function LibraryAttachmentPicker({initialQuery="",finalFocusRef,onClose,onAdd}:{finalFocusRef: RefObject<HTMLTextAreaElement>;initialQuery?:string;onClose:()=>void;onAdd:(files:File[])=>Promise<(string | undefined)[]>}) {
+export default function LibraryAttachmentPicker({initialQuery="",initialSource="library",finalFocusRef,onClose,onAdd}:{finalFocusRef: RefObject<HTMLElement>;initialQuery?:string;initialSource?:"library" | "drive";onClose:()=>void;onAdd:(files:File[])=>Promise<(string | undefined)[]>}) {
   const searchRef = useRef<HTMLInputElement>(null);
   const driveAvailable = useDriveConnected();
-  const [driveSelected,setShowDrive] = useState(false);
+  const [driveSelected,setShowDrive] = useState(initialSource === "drive");
   const showDrive = driveSelected && driveAvailable;
   const [items,setItems] = useState<LibraryFile[]>();
   const [space,setSpace] = useState<LibraryFile>();

@@ -1,3 +1,4 @@
+import { createImportedMcpTransport } from "./importedTransport";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -19,6 +20,7 @@ export type McpServerConfig =
       transport: "http" | "sse";
       url: string;
       headers?: Record<string, string>;
+      userImported?: boolean;
     };
 
 /**
@@ -26,7 +28,7 @@ export type McpServerConfig =
  * 连接配置中的 MCP Server，并将它们的工具动态注册到本次运行的 ToolRegistry。
  */
 export class McpClientManager {
-  private readonly clients: Array<{ name: string; client: Client }> = [];
+  private readonly clients: Array<{ name: string; client: Client; closeTransport?: () => Promise<void> }> = [];
 
   async connectAll(
     configs: McpServerConfig[],
@@ -34,7 +36,7 @@ export class McpClientManager {
   ): Promise<void> {
     for (const cfg of configs) {
       try {
-        await this.connectOne(cfg, registry);
+        await this.connect(cfg, registry);
       } catch (error) {
         console.warn(
           `[mcp] failed to connect "${cfg.name}":`,
@@ -44,7 +46,7 @@ export class McpClientManager {
     }
   }
 
-  private async connectOne(
+  async connect(
     cfg: McpServerConfig,
     registry: ToolRegistry,
   ): Promise<void> {
@@ -52,6 +54,9 @@ export class McpClientManager {
       name: "aistudio-hermes-agent",
       version: "1.0.0",
     });
+    const imported = cfg.transport !== "stdio" && cfg.userImported
+      ? await createImportedMcpTransport(cfg.url)
+      : undefined;
     const transport =
       cfg.transport === "stdio"
         ? new StdioClientTransport({
@@ -69,19 +74,21 @@ export class McpClientManager {
             )
           : new StreamableHTTPClientTransport(
               new URL(cfg.url),
-              cfg.headers
-                ? { requestInit: { headers: cfg.headers } }
-                : undefined,
+              {
+                ...(cfg.headers ? { requestInit: { headers: cfg.headers } } : {}),
+                ...(imported ? { fetch: imported.fetch } : {}),
+              },
             );
 
     try {
-      await client.connect(transport);
+      await client.connect(transport, imported ? { timeout: 10_000 } : undefined);
       const contributions: ToolDefinition<any>[] = [];
       const cursors = new Set<string>();
       let cursor: string | undefined;
       do {
-        const listed = await client.listTools(cursor ? { cursor } : undefined);
+        const listed = await client.listTools(cursor ? { cursor } : undefined, imported ? { timeout: 10_000 } : undefined);
         for (const tool of listed.tools || []) {
+          if (imported && contributions.length >= 100) throw new Error("Imported MCP server exceeds the tool limit");
           const registeredName = `mcp__${cfg.name}__${tool.name}`;
           const schema = (tool.inputSchema || {
             type: "object",
@@ -145,60 +152,18 @@ export class McpClientManager {
         names.add(key);
       }
       for (const tool of contributions) registry.register(tool);
-      this.clients.push({ name: cfg.name, client });
+      this.clients.push({ name: cfg.name, client, closeTransport: imported?.close });
     } catch (error) {
       await client.close().catch(() => {});
+      await imported?.close().catch(() => {});
       throw error;
     }
   }
 
   async closeAll(): Promise<void> {
-    await Promise.allSettled(this.clients.map((entry) => entry.client.close()));
+    await Promise.allSettled(this.clients.map(async (entry) => {
+      try { await entry.client.close(); } finally { await entry.closeTransport?.(); }
+    }));
     this.clients.length = 0;
   }
 }
-
-/** 从环境变量 `AGENT_MCP_SERVERS` 或 `MCP_SERVER_URLS` 读取外部 MCP Server 配置 */
-export const loadMcpConfigsFromEnv = (): McpServerConfig[] => {
-  const configs: McpServerConfig[] = [];
-  for (const envKey of ["AGENT_MCP_SERVERS", "MCP_SERVER_URLS"]) {
-    const raw = (process.env[envKey] || "").trim();
-    if (!raw) continue;
-    try {
-      const parsed = JSON.parse(raw);
-      if (!Array.isArray(parsed)) continue;
-      for (const item of parsed) {
-        if (!item || typeof item !== "object") continue;
-        const record = item as Record<string, unknown>;
-        if (
-          record.transport === "stdio" &&
-          typeof record.command === "string"
-        ) {
-          configs.push(record as McpServerConfig);
-        } else if (typeof record.url === "string" && record.url.trim()) {
-          const url = record.url.trim();
-          const transport =
-            record.transport === "sse" || record.transport === "http"
-              ? record.transport
-              : url.toLowerCase().endsWith("/sse")
-                ? "sse"
-                : "http";
-          configs.push({
-            name:
-              typeof record.name === "string" && record.name.trim()
-                ? record.name.trim()
-                : "mcp",
-            transport,
-            url,
-            ...(record.headers && typeof record.headers === "object"
-              ? { headers: record.headers as Record<string, string> }
-              : {}),
-          });
-        }
-      }
-    } catch {
-      // ignore invalid JSON
-    }
-  }
-  return configs;
-};

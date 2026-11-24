@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  alignUserBubbleSkillTags,
+  buildConversationTitle,
   buildUserBubbleContent,
+  formatUserSkillTag,
   extractSelectedFilePathsFromUserContent,
   normalizeAttachmentWorkspacePath,
   normalizeHistoryMessagesForTimeline,
@@ -170,4 +173,25 @@ test("buildUserBubbleContent does not emit FILETAG for selected files", () => {
   assert.ok(content.includes("SKILLTAG:"));
   assert.ok(!content.includes("FILETAG:"));
   assert.ok(content.includes("请帮我总结"));
+});
+
+
+test("user bubbles keep inline skills in order and align old leading tags", () => {
+  const tag = formatUserSkillTag("plugin-creator");
+  const content = buildUserBubbleContent({
+    text: "前文 后文",
+    bubbleText: `前文 ${tag} 后文`,
+    files: [],
+    selectedSkills: ["plugin-creator"],
+  });
+  assert.equal(content, `前文 ${tag} 后文`);
+  assert.equal(alignUserBubbleSkillTags(`${tag}\n\n旧消息正文`), `${tag} 旧消息正文`);
+  assert.equal(alignUserBubbleSkillTags(`${tag}\n\n# 标题`), `${tag}\n\n# 标题`);
+});
+
+
+test("conversation titles exclude skill and file markers before truncating", () => {
+  const tag = formatUserSkillTag("plugin-creator");
+  assert.equal(buildConversationTitle(`${tag} 帮我创建一个插件`), "帮我创建一个插件");
+  assert.equal(buildConversationTitle(`[文件](FILETAG:notes.txt) ${tag}`), null);
 });

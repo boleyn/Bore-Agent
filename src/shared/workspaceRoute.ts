@@ -1,6 +1,6 @@
 import type { ParsedUrlQuery } from "querystring";
 
-export type WorkspaceView = "chat" | "library" | "projects" | "schedules";
+export type WorkspaceView = "chat" | "library" | "projects" | "schedules" | "plugins" | "skills";
 
 export type ParsedWorkspaceRoute = {
   view: WorkspaceView;
@@ -62,6 +62,12 @@ export function parseWorkspaceRoute(
   if (pathname === "/schedules") {
     return { view: "schedules" };
   }
+  if (pathname === "/plugins") {
+    return { view: "plugins" };
+  }
+  if (pathname === "/skills") {
+    return { view: "skills" };
+  }
   if (pathname.startsWith("/c/")) {
     const rawId = pathname.slice(3).split("/")[0];
     if (rawId) {
@@ -71,7 +77,13 @@ export function parseWorkspaceRoute(
   }
 
   const queryView = getSingleQuery(query, "view");
-  if (queryView === "library" || queryView === "projects" || queryView === "schedules") {
+  if (
+    queryView === "library" ||
+    queryView === "projects" ||
+    queryView === "schedules" ||
+    queryView === "plugins" ||
+    queryView === "skills"
+  ) {
     return { view: queryView };
   }
 
@@ -88,7 +100,15 @@ export function getWorkspaceReturnPath(resolvedUrl: string, query: ParsedUrlQuer
   const search = new URL(resolvedUrl, "http://localhost").search;
 
   if (conversation) return `/c/${encodeURIComponent(decodePathSegment(conversation))}${search}`;
-  if (view === "library" || view === "projects" || view === "schedules") return `/${view}${search}`;
+  if (
+    view === "library" ||
+    view === "projects" ||
+    view === "schedules" ||
+    view === "plugins" ||
+    view === "skills"
+  ) {
+    return `/${view}${search}`;
+  }
   return resolvedUrl;
 }
 
@@ -155,6 +175,12 @@ export function buildWorkspaceLocation(
   }
   if (view === "schedules") {
     return { href, as: `/schedules${serializeQuery(cleanExtra)}` };
+  }
+  if (view === "plugins") {
+    return { href, as: `/plugins${serializeQuery(cleanExtra)}` };
+  }
+  if (view === "skills") {
+    return { href, as: `/skills${serializeQuery(cleanExtra)}` };
   }
   if (conversationId) {
     return {

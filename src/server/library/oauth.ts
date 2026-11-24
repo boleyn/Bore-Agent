@@ -57,7 +57,8 @@ export async function handleLibraryOAuth(provider: Provider, req: NextApiRequest
   if (req.method === "POST") {
     const siteId = google ? req.body?.siteId : undefined;
     if (siteId !== undefined && (typeof siteId !== "string" || !/^[0-9a-f]{24}$/.test(siteId))) return res.status(400).end();
-    const state = randomBytes(32).toString("hex") + (siteId ? "." + siteId : "");
+    const suffix = siteId ? "." + siteId : req.body?.returnTo === "plugins" ? ".plugins" : "";
+    const state = randomBytes(32).toString("hex") + suffix;
     res.setHeader("Set-Cookie", cookie(owner + "." + state, 600));
     const params = new URLSearchParams({ client_id: clientId, redirect_uri: redirect, response_type: "code",
       scope, state });
@@ -83,6 +84,9 @@ export async function handleLibraryOAuth(provider: Provider, req: NextApiRequest
   }
   const siteId = typeof req.query.state === "string" && /^[a-f0-9]{64}\.([a-f0-9]{24})$/.exec(req.query.state)?.[1];
   if (siteId) returnTo = "/share/preview/" + siteId + "?libraryConnectors=";
+  if (/^[a-f0-9]{64}\.plugins$/.test(req.query.state)) {
+    returnTo = "/plugins?" + new URLSearchParams({ connector: provider }) + "&connection=";
+  }
   // A stale tab must not clear the state for a newer authorization attempt.
   res.setHeader("Set-Cookie", cookie("", 0));
   if (typeof req.query.code !== "string") return res.redirect(303, returnTo + (req.query.error === "access_denied" ? "cancelled" : "error"));

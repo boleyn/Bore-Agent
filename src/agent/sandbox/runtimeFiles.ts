@@ -11,7 +11,7 @@ const normalizeRuntimePath = (filePath: string): string => {
   return normalized.startsWith("/") ? normalized : `/${normalized}`;
 };
 
-export const collectSystemSkillFiles = (systemSkillsRoot: string): RuntimeProjectFiles => {
+export const collectSystemSkillFiles = (systemSkillsRoot: string, disabledTokens: ReadonlySet<string> = new Set()): RuntimeProjectFiles => {
   const normalizedRoot = path.resolve(systemSkillsRoot);
   if (!existsSync(normalizedRoot)) return {};
 
@@ -34,6 +34,7 @@ export const collectSystemSkillFiles = (systemSkillsRoot: string): RuntimeProjec
       if (entry.name.startsWith(".") || ["node_modules", "__pycache__"].includes(entry.name)) continue;
       const fullPath = path.join(currentDir, entry.name);
       if (entry.isDirectory()) {
+        if (currentDir === normalizedRoot && disabledTokens.has(entry.name)) continue;
         walk(fullPath);
         continue;
       }

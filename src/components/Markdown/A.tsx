@@ -6,6 +6,8 @@ import React, { useMemo } from 'react';
 import { isObjectId } from '@/global/common/string/utils';
 import { getFileIcon } from '@fastgpt/global/common/file/icon';
 import type { OutLinkChatAuthProps } from '@/global/support/permission/chat';
+import { ChatGptSkillsNavIcon } from "@components/customize/CustomizeIcons";
+import { getSkillDisplayName } from "@/features/chat/utils/chatPanelUtils";
 import { useMarkdownCtx } from './context';
 
 export type AProps = {
@@ -140,20 +142,14 @@ const A = ({
         as="span"
         display="inline-flex"
         alignItems="center"
-        px={2}
-        py={0.5}
-        mr={1.5}
-        mb={1}
-        borderRadius="8px"
-        border="1px solid"
-        borderColor="adora.300"
-        bg="adora.50"
-        color="adora.800"
-        fontSize="12px"
-        fontWeight={700}
-        lineHeight={1.2}
+        gap={1}
+        color="#0285FF"
+        fontWeight={500}
+        verticalAlign="baseline"
+        whiteSpace="nowrap"
       >
-        {decoded}
+        <ChatGptSkillsNavIcon size={14} />
+        {getSkillDisplayName(decoded)}
       </Box>
     );
   }

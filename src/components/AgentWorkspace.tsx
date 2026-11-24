@@ -52,6 +52,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Pencil,
+  Blocks,
   Plus,
   Search,
   SlidersHorizontal,
@@ -70,6 +71,8 @@ import ProjectSettingsModal from "./agent-workspace/ProjectSettingsModal";
 import ProjectsDirectoryView from "./agent-workspace/ProjectsDirectoryView";
 import type { Schedule } from "@/shared/schedules/types";
 import SchedulesView from "./agent-workspace/SchedulesView";
+import CustomizeView from "./agent-workspace/CustomizeView";
+import { ChatGptPluginsRailIcon } from "./customize/CustomizeIcons";
 import WorkspaceSidebar, {
   SIDEBAR_DEFAULT_WIDTH,
   SIDEBAR_ICON_SIZE,
@@ -177,7 +180,10 @@ export default function AgentWorkspace({
     }
   }, [activeNav, activeToken, routeChatId]);
 
-  const [libraryDraft,setLibraryDraft] = useState<{chatId:string;files:File[];text?:string;imageMode?:boolean}>();
+  const [managedSkillsRevision, setManagedSkillsRevision] = useState(0);
+  const [chatPluginDialog, setChatPluginDialog] = useState<"upload" | "mcp">();
+  const [composerPluginId, setComposerPluginId] = useState<string>();
+  const [libraryDraft,setLibraryDraft] = useState<{chatId:string;files:File[];text?:string;imageMode?:boolean;skills?:string[]}>();
 
   // 右侧浮动资源卡（输出 / 来源）与文件预览抽屉
   const [floatingResourcesOpen, setFloatingResourcesOpen] = useState(false);
@@ -398,6 +404,13 @@ export default function AgentWorkspace({
     [activeToken, projects],
   );
 
+  const projectDeviceId = activeProject?.workspace?.kind === "connector"
+    ? activeProject.workspace.deviceId
+    : undefined;
+  const projectDeviceLabel = projectDeviceId
+    ? pairedDevices.find((device) => device.deviceId === projectDeviceId)?.name || "本地电脑"
+    : "云电脑";
+
   const filteredProjects = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     if (!q) return projects;
@@ -444,6 +457,32 @@ export default function AgentWorkspace({
   const handleSelectConversation = (token: string, chatId: string) => {
     closeMobileSidebar();
     return navigateToChat(token, chatId);
+  };
+
+  const openChatWithSkill = async (skillName: string, text = `@${skillName} `) => {
+    try {
+      const isCloudProject = (project: ProjectWithConversations) => project.workspace?.kind !== "connector";
+      let token = activeProject && isCloudProject(activeProject)
+        ? activeProject.token
+        : projects.find(isCloudProject)?.token;
+      if (!token) {
+        const existing = await apiJson<ProjectWithConversations[]>("/projects?includeConversations=1");
+        token = existing.find(isCloudProject)?.token;
+      }
+      if (!token) {
+        const created = await apiJson<{ token: string }>("/projects", {
+          method: "POST",
+          body: JSON.stringify({ name: "个人工作区", files: {}, dependencies: {} }),
+        });
+        token = created.token;
+      }
+      const chat = await createConversation(token, []);
+      if (!chat) throw new Error("无法创建新对话");
+      setLibraryDraft({ chatId: chat.id, files: [], skills: [skillName], text });
+      await handleSelectConversation(token, chat.id);
+    } catch {
+      toast({ title: "未能打开新对话，请重试", status: "error" });
+    }
   };
 
   const handleNewConversationInProject = handleSelectProject;
@@ -811,19 +850,28 @@ export default function AgentWorkspace({
                 workspaceComposer={{
                   libraryDraft,
                   onLibraryDraftConsumed: () => setLibraryDraft(undefined),
+                  projectDeviceLabel,
+                  projectDeviceKind: projectDeviceId ? "connector" : "remote-vm",
                   deviceAccessKind: activeDeviceAccess?.kind,
                   deviceAccessLabel: activeDeviceAccess?.kind === "connector"
                     ? pairedDevices.find(device => device.deviceId === activeDeviceAccess.deviceId)?.name || "本地电脑"
-                    : activeDeviceAccess?.kind === "remote-vm" ? "云电脑" : "访问设备",
+                    : activeDeviceAccess?.kind === "remote-vm" ? "云电脑" : projectDeviceLabel,
                   selectedDeviceId: activeDeviceAccess?.kind === "connector" ? activeDeviceAccess.deviceId : undefined,
                   requestingDeviceAccess,
                   cloudHostStatus,
-                  devices: pairedDevices,
+                  devices: pairedDevices.filter((device) => device.deviceId !== projectDeviceId || device.deviceId === (activeDeviceAccess?.kind === "connector" && activeDeviceAccess.deviceId)),
                   onOpenHostMenu: () => { void fetchPairedDevices(); void fetchCloudHostStatus(); },
                   onClearDeviceAccess: () => selectDeviceAccess(activeProject.token),
                   onSelectCloudHost: () => selectDeviceAccess(activeProject.token, { kind: "remote-vm" }),
                   onSelectDeviceHost: (device) => void requestDeviceAccess(activeProject.token, device.deviceId),
                   onOpenDeviceManagement: devicesModal.onOpen,
+                  managedSkillsRevision,
+                  onOpenSkills: () => setActiveNav("skills"),
+                  onAddPlugin: setChatPluginDialog,
+                  onOpenPlugins: (pluginId) => {
+                    setComposerPluginId(pluginId);
+                    setActiveNav("plugins");
+                  },
                   projectToken: activeProject.token,
                   projectName: activeProject.name,
                   projects: projects.map((p) => ({ token: p.token, name: p.name })),
@@ -933,6 +981,17 @@ export default function AgentWorkspace({
               onClick={() => setActiveNav("schedules")}
             />
           </Tooltip>
+          <Tooltip label="插件" placement="right">
+            <IconButton
+              aria-label="插件"
+              icon={<ChatGptPluginsRailIcon size={18} />}
+              size="sm"
+              variant="ghost"
+              color={activeNav === "plugins" || activeNav === "skills" ? "ink.primary" : "ink.secondary"}
+              bg={activeNav === "plugins" || activeNav === "skills" ? "surface.active" : "transparent"}
+              onClick={() => setActiveNav("plugins")}
+            />
+          </Tooltip>
           <Tooltip label="我的设备" placement="right">
             <IconButton aria-label="我的设备" icon={<LayoutGrid size={17} />} size="sm"
               variant="ghost" color="ink.secondary" onClick={devicesModal.onOpen} />
@@ -1004,6 +1063,35 @@ export default function AgentWorkspace({
           onSelectConversation={selectScheduleConversation}
           conversation={scheduleConversation && activeProject?.token === scheduleConversation.token ? conversationPane : null}
           onOpen={handleSelectConversation}
+        />
+      )}
+      {chatPluginDialog && (
+        <CustomizeView
+          mode="plugins"
+          onChangeMode={setActiveNav}
+          pluginDialog={{
+            kind: chatPluginDialog,
+            onClose: () => setChatPluginDialog(undefined),
+            onInstalled: (plugin) => toast({ title: `已安装 ${plugin.name}`, status: "success" }),
+          }}
+        />
+      )}
+      {(activeNav === "plugins" || activeNav === "skills") && (
+        <CustomizeView
+          mode={activeNav}
+          initialPluginId={composerPluginId}
+          onInitialPluginOpened={() => setComposerPluginId(undefined)}
+          onChangeMode={(mode) => setActiveNav(mode)}
+          onSkillAvailabilityChanged={() => setManagedSkillsRevision((revision) => revision + 1)}
+          onTrySkill={(skillName) => void openChatWithSkill(skillName)}
+          onCreateSkillWithChat={() => void openChatWithSkill(
+            "skill-creator",
+            "用 @skill-creator 帮我创建一个技能。以聊天的方式交流，先问我这个技能要做什么。",
+          )}
+          onCreatePluginWithChat={() => void openChatWithSkill(
+            "plugin-creator",
+            "@plugin-creator 帮我创建一个插件",
+          )}
         />
       )}
       <Flex

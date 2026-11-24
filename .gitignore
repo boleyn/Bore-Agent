@@ -43,6 +43,9 @@ copilot-messages.log
 data/projects/*
 !data/projects/.gitkeep
 data/published-sites/
+/data/plugins.json
+/data/skills.json
+/data/customization/
 
 # Archive formats
 *.zip

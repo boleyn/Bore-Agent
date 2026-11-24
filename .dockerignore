@@ -15,3 +15,8 @@ data/sandboxes
 data/sandboxes/**
 
 public/file-viewer/
+
+# Runtime plugin and skill state
+/data/plugins.json
+/data/skills.json
+/data/customization/

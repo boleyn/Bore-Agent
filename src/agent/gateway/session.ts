@@ -1,3 +1,4 @@
+import { listImportedMcpConfigs } from "@server/plugins/store";
 import type { DeviceAccess } from "@/types/projectWorkspace";
 import { createLocalDeviceExecutor } from "../sandbox/environments/localDevice";
 import { BashTool, runTerminalCommand } from "../tools/builtin/terminalTool";
@@ -16,7 +17,6 @@ import path from "node:path";
 import type { ChatCompletionMessageParam } from "@aistudio/ai/compat/global/core/ai/type";
 import { createSdkMessage, type SdkMessage } from "@shared/chat/sdkMessages";
 import type { SdkStreamEventName } from "@shared/network/sdkStreamEvents";
-import { loadMcpConfigsFromEnv } from "../mcp";
 import {
   PluginRuntime,
   builtinPlugins,
@@ -33,6 +33,7 @@ import {
   type ProjectFiles,
   type SandboxKind,
 } from "../sandbox";
+import { getDisabledBuiltinSkillTokens, getSelectedBuiltinSkills, getSelectedCustomSkills } from "@/server/skills/store";
 import { createSkillCatalog } from "../skills/catalog";
 import { getContextWindowForModel } from "../app/context";
 import { runAgentLoop } from "../app/agentLoop";
@@ -154,8 +155,10 @@ export async function runAgentSession(
       ? input.permissionMode.trim()
       : "default";
 
+  const disabledBuiltinSkillTokens = getDisabledBuiltinSkillTokens();
   const systemSkillFiles = collectSystemSkillFiles(
     path.resolve(process.cwd(), "skills"),
+    disabledBuiltinSkillTokens,
   );
   const runtimeSkillFiles = excludeProjectOverrides(
     systemSkillFiles,
@@ -180,7 +183,7 @@ export async function runAgentSession(
   let plugins: PluginRuntime | undefined;
   try {
     plugins = await PluginRuntime.create(
-      [...builtinPlugins, createMcpPlugin(loadMcpConfigsFromEnv()),
+      [...builtinPlugins, createMcpPlugin(listImportedMcpConfigs(input.isSubagent ? undefined : input.userId)),
         librarySpacePlugin(input.isSubagent ? undefined : input.userId, input.token, input.chatId),
         siteConnectionsPlugin(input.isSubagent ? undefined : input.userId, input.token),
         schedulePlugin(input.userId && input.token && input.chatId && !input.isSubagent
@@ -249,19 +252,29 @@ export async function runAgentSession(
         if (tool) tool.instructionSkills = [...(tool.instructionSkills || []), skill.name];
       }
     }
-    const skills = createSkillCatalog(sandbox, [...plugins.skills, ...instructionSkills]);
+    const excludedBuiltinSkillPaths = new Set(
+      Array.from(disabledBuiltinSkillTokens, (token) => `/skills/${token}/SKILL.md`)
+        .filter((skillPath) => !inputProjectPaths.has(skillPath))
+    );
+    const skills = createSkillCatalog(
+      sandbox,
+      [...plugins.skills, ...instructionSkills],
+      [...getSelectedBuiltinSkills(input.selectedSkills), ...getSelectedCustomSkills(input.selectedSkills)],
+      excludedBuiltinSkillPaths,
+    );
     const [availableSkills, memoryBlock] = await Promise.all([
       skills.list(),
       input.token && plugins.active.includes("memory")
         ? new MemoryStore(input.token).buildPromptBlock()
         : Promise.resolve(null),
     ]);
+    const availableSkillNames = new Set(availableSkills.map((skill) => skill.name.toLowerCase()));
     const promptContext = {
       sandboxKind: sandbox.kind,
       isSubagent: input.isSubagent,
       toolNames,
       permissionMode,
-      selectedSkills: input.selectedSkills,
+      selectedSkills: input.selectedSkills.filter((name) => availableSkillNames.has(name.trim().toLowerCase())),
       availableSkills,
       memoryBlock,
       systemDirectives: extractSystemDirectives(input.messages),

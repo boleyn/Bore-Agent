@@ -16,3 +16,31 @@ test("plugin skills disclose reference names without their bodies, then read sel
   expect(result.content).not.toContain("secret");
   expect(catalog.readReference!("finance:invoice", "../private")).rejects.toThrow("Invalid");
 });
+
+test("selected managed skills load their content and preserve existing plugin skills", async () => {
+  const sandbox = { fs: { readdir: async () => [] } } as unknown as Sandbox;
+  const catalog = createSkillCatalog(
+    sandbox,
+    [{ name: "existing", description: "Plugin", path: "plugin:existing/SKILL.md", content: "Plugin content" }],
+    [
+      { name: "会议摘要", description: "Managed", path: "managed:summary/SKILL.md", content: "Summarize decisions" },
+      { name: "existing", description: "Managed", path: "managed:existing/SKILL.md", content: "Managed content" },
+    ],
+  );
+  expect((await catalog.load("会议摘要"))?.content).toBe("Summarize decisions");
+  expect((await catalog.load("existing"))?.content).toBe("Plugin content");
+});
+
+test("excluded built-in paths cannot be loaded from a persistent workspace", async () => {
+  const sandbox = {
+    fs: {
+      readdir: async (path: string) => path === "/skills"
+        ? [{ type: "directory", path: "/skills/disabled", name: "disabled" }]
+        : [],
+      readText: async () => "---\nname: disabled\ndescription: Built-in fixture\n---\nInstructions",
+    },
+  } as unknown as Sandbox;
+  const catalog = createSkillCatalog(sandbox, [], [], new Set(["/skills/disabled/SKILL.md"]));
+  expect(await catalog.list()).toEqual([]);
+  expect(await catalog.load("disabled")).toBeUndefined();
+});

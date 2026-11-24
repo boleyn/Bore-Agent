@@ -3,7 +3,7 @@
 import { ObjectId } from "mongodb";
 
 import { createChatId, createDataId } from "@shared/chat/ids";
-import { extractText } from "@shared/chat/messages";
+import { buildConversationTitle, extractText } from "@shared/chat/messages";
 import type { ToolCall } from "../../types/conversation";
 import type { ChatCompletionMessageParam } from "@aistudio/ai/compat/global/core/ai/type";
 import { getConfiguredContextWindow as getContextWindowForModel } from "@/agent/gateway/modelConnection";
@@ -345,11 +345,8 @@ const docToMessage = (doc: ConversationItemDoc): ConversationMessage => ({
 const summaryTitle = (doc: ConversationMetaDoc) =>
   (doc.customTitle || doc.title || "历史记录").trim() || "历史记录";
 
-const deriveTitleFromMessage = (content: unknown): string | null => {
-  const text = extractText(content).trim();
-  if (!text) return null;
-  return text.length > 40 ? `${text.slice(0, 40)}...` : text;
-};
+const deriveTitleFromMessage = (content: unknown): string | null =>
+  buildConversationTitle(extractText(content));
 
 const toSummary = (doc: ConversationMetaDoc): ConversationSummary => {
   const now = new Date();

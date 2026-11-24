@@ -8,7 +8,7 @@ Bore Agent 是一个支持私有化部署的智能体工作台。你可以把业
 
 > 帮客服主管做一份每周复盘首次响应超时的 Markdown 模板。只剩渠道范围还没定，请先让我选渠道，再给我看方案，确认后保存。超时阈值保留为待填项。
 
-**先确定统计范围。** 在「计划」模式里，伯仁询问模板应覆盖哪个渠道。主管可以选择“在线客服”，也可以输入自己的统计口径。
+**先确定统计范围。** 从输入框的「+」选择「计划」后，伯仁询问模板应覆盖哪个渠道。主管可以选择“在线客服”，也可以输入自己的统计口径。
 
 ![在真实工作台对话中选择客服渠道并提交答案](docs/images/plan-question.png)
 
@@ -26,6 +26,15 @@ Bore Agent 是一个支持私有化部署的智能体工作台。你可以把业
 
 主智能体可将独立调查委派给只读子智能体，并在当前轮汇总结果。后台任务支持等待、查询和取消。长对话会按模型窗口预算压缩，保留近期工具调用和结果，并将较早的记录归档以供回读。
 
+## 插件与技能
+
+- **创建插件**。打开「插件 → 添加 → 创建插件」，伯仁会新建对话并预填带有 **Plugin Creator** 标签的请求。发送后，可让它澄清需求、编写 MCP 服务，或把已有服务打包成伯仁可安装的 ZIP。
+- **安装与管理**。从对话的「+ → 导入并安装插件」或插件页导入 .zip、.tgz 或 .tar.gz，压缩包上限为 700 KB。也可直接添加使用公开 HTTPS 和 Streamable HTTP 的 MCP 服务器，支持无认证或 Bearer Token。可在插件详情测试连接、编辑配置、停用或卸载。
+- **在聊天中使用**。「+」集中提供附件、工作模式、技能和可操作的插件。技能也可以通过 @ 选择，标签保留在输入框和已发送气泡的原位置。技能页支持通过聊天创建、编辑器创建、导入和启停。
+- **插件来源**。插件页包含伯仁内置的网页与站点工具，以及当前账号添加或导入的插件。聊天会发现当前账号已启用的 MCP 工具。
+
+详见[插件和技能架构](docs/agent-architecture.md#插件与技能)。
+
 ## Hermes Agent 规范与架构
 
 Bore Agent 采用 **Hermes Agent** 的工具注册、插件贡献、技能渐进加载与 Gateway 编排规范（以 TypeScript 实现于 Next.js Node 服务端，非 Python 二进制兼容层）：
@@ -33,7 +42,7 @@ Bore Agent 采用 **Hermes Agent** 的工具注册、插件贡献、技能渐进
 - **Gateway 编排（`src/agent/gateway/`）**：统一解析模型连接、建立沙盒与插件、冻结提示词上下文、驱动 ReAct 主循环并适配 SSE 流式协议，最终导出成果并释放资源。
 - **Agent 主体（`src/agent/app/`）**：实现 ReAct 流式主循环、模型上下文窗口预算、工具输出裁剪与结构化摘要压缩（`docs/context-engineering.md`），以及跨轮持久化记忆（`src/agent/memory/`）。
 - **工具与插件（`src/agent/tools/`、`src/agent/plugins/`）**：通过统一工具注册中心（`ToolRegistry`）分发内置工具，并支持通过插件 Manifest 贡献工具、技能、提示词与 MCP 服务，实现逐请求激活与逆序清理。
-- **技能与 MCP（`src/agent/skills/`、`src/agent/mcp/`）**：支持 YAML frontmatter 技能的按需渐进加载（内置目录、项目快照与沙盒目录），以及基于 `@modelcontextprotocol/sdk` 的 stdio / HTTP / SSE MCP 客户端桥接。
+- **技能与 MCP（`src/agent/skills/`、`src/agent/mcp/`）**：支持 YAML frontmatter 技能的按需渐进加载（内置目录、项目快照与沙盒目录），以及基于 `@modelcontextprotocol/sdk` 的 MCP 客户端。通过产品界面安装的外部插件使用 Streamable HTTP。
 
 ```mermaid
 flowchart LR
@@ -126,7 +135,7 @@ bun run dev
 docker compose up -d --build
 ```
 
-启动后访问 [localhost:18367](http://localhost:18367)。
+启动后访问 [localhost:18367](http://localhost:18367)。Compose 默认将插件和技能状态保存在 `./data/customization`。使用自定义 Compose 文件时，请设置 `AISTUDIO_CUSTOMIZATION_DIR` 并挂载对应的可写目录，使这些状态在容器重建后保留。
 
 ## 模型配置
 

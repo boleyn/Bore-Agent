@@ -116,6 +116,17 @@ export function WorkbenchShell({
                   >
                     模型中心
                   </Button>
+                  <Button
+                    variant="ghost"
+                    justifyContent="flex-start"
+                    borderRadius="md"
+                    {...navInactiveStyles}
+                    _hover={{ bg: "myGray.100" }}
+                    as={NextLink}
+                    href="/plugins"
+                  >
+                    插件与技能
+                  </Button>
                 </Flex>
               </Box>
 

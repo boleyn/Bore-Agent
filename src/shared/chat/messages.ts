@@ -32,6 +32,15 @@ export type IncomingMessage = {
   artifact?: unknown;
 };
 
+export const stripTagMarkersFromUserContent = (content: string): string =>
+  content.replace(/\[[^\]\n]+\]\((?:SKILLTAG|FILETAG):[^)\n]+\)/g, "");
+
+export const buildConversationTitle = (content: string): string | null => {
+  const text = stripTagMarkersFromUserContent(content).trim();
+  if (!text) return null;
+  return text.length > 40 ? `${text.slice(0, 40)}...` : text;
+};
+
 export const extractText = (content: unknown): string => {
   if (content == null) return "";
   if (typeof content === "string") return content;

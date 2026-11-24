@@ -52,6 +52,7 @@ export interface ChatInputSubmitPayload {
     decision: "approve" | "reject";
     note?: string;
   };
+  bubbleText?: string;
   selectedSkill?: string;
   selectedSkills?: string[];
   selectedFilePaths?: string[];
@@ -83,8 +84,10 @@ export interface WorkspaceComposerDeviceOption {
 }
 
 export interface WorkspaceComposerConfig {
-  libraryDraft?: { chatId:string; files:File[]; text?:string; imageMode?:boolean };
+  libraryDraft?: { chatId:string; files:File[]; text?:string; imageMode?:boolean; skills?:string[] };
   onLibraryDraftConsumed?: () => void;
+  projectDeviceLabel?: string;
+  projectDeviceKind?: "remote-vm" | "connector";
   deviceAccessKind?: "remote-vm" | "connector";
   deviceAccessLabel?: string;
   selectedDeviceId?: string;
@@ -96,6 +99,10 @@ export interface WorkspaceComposerConfig {
   onOpenHostMenu?: () => void;
   onSelectDeviceHost?: (device: WorkspaceComposerDeviceOption) => void;
   onOpenDeviceManagement?: () => void;
+  managedSkillsRevision?: number;
+  onOpenSkills?: () => void;
+  onAddPlugin?: (kind: "upload" | "mcp") => void;
+  onOpenPlugins?: (pluginId?: string) => void;
   projectToken?: string;
   projectName?: string;
   projects?: Array<{ token: string; name: string }>;

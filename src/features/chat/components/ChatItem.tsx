@@ -10,7 +10,7 @@ import { LibraryReadError, libraryReadMessage, loadLibraryFiles, readLibraryAtta
 import { withAuthHeaders } from "@features/auth/client/authClient";
 import InteractiveHtmlPreview from "@/components/workspace/InteractiveHtmlPreview";
 import LibraryMarkdown from "@/components/agent-workspace/LibraryMarkdown";
-import { toProjectFileViewUrl, resolveChatUploadUrl } from "../utils/chatPanelUtils";
+import { alignUserBubbleSkillTags, toProjectFileViewUrl, resolveChatUploadUrl } from "../utils/chatPanelUtils";
 import { downloadWorkspaceArtifact } from "../services/files";
 import { artifactFileType } from "@/components/workspace/ArtifactFileIcon";
 import Markdown from "@/components/Markdown";
@@ -457,7 +457,7 @@ const ChatItem = ({
                 })}
               </Grid>
             ) : null}
-            {content ? <Markdown source={content} /> : null}
+            {content ? <Markdown source={alignUserBubbleSkillTags(content)} /> : null}
           </Flex>
         ) : isSystem ? (
           <Text color="myGray.500" fontSize="xs">{content}</Text>

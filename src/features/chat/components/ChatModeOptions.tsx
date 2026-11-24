@@ -1,11 +1,11 @@
-import { Box, MenuItem } from "@chakra-ui/react";
+import { Box, MenuItem, Text } from "@chakra-ui/react";
 import { Check, Lightbulb, Play, Target } from "lucide-react";
 import type { ChatInputProps } from "../types/chatInput";
 
 export const modeOptions = {
-  default: { label: "执行", Icon: Play },
-  plan: { label: "计划", Icon: Lightbulb },
-  goal: { label: "目标", Icon: Target },
+  default: { label: "执行", description: "直接处理任务", Icon: Play },
+  plan: { label: "计划", description: "先制定方案，再开始执行", Icon: Lightbulb },
+  goal: { label: "目标", description: "持续推进，直到达成目标", Icon: Target },
 } as const;
 
 export function ChatModeOptions({
@@ -16,7 +16,7 @@ export function ChatModeOptions({
     <>
       {(Object.keys(modeOptions) as Array<keyof typeof modeOptions>).map(
         (value) => {
-          const { label, Icon } = modeOptions[value];
+          const { label, description, Icon } = modeOptions[value];
           return (
             <MenuItem
               key={value}
@@ -32,7 +32,12 @@ export function ChatModeOptions({
                 alignItems="center"
                 justifyContent="space-between"
               >
-                {label}
+                <Box as="span" minW={0}>
+                  {label}
+                  <Text as="span" ml={2} color="gray.500" fontSize="xs">
+                    {description}
+                  </Text>
+                </Box>
                 {mode === value && <Check size={15} />}
               </Box>
             </MenuItem>

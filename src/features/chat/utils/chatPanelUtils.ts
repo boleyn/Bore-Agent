@@ -2,6 +2,7 @@ import { chatUploadOrigin, chatUploadSegment, resolveUploadScope } from "@/share
 import { libraryOrigin } from "../services/libraryFileOrigin";
 import { inferAttachmentMimeType } from "./attachmentMimeType";
 import { extractText } from "@shared/chat/messages";
+export { buildConversationTitle, stripTagMarkersFromUserContent } from "@shared/chat/messages";
 import type { ChatInputFile } from "../types/chatInput";
 import type { ContextWindowUsage } from "../types/contextWindow";
 import type { UploadedFileArtifact } from "../types/fileArtifact";
@@ -109,12 +110,6 @@ export const normalizeHistoryMessagesForTimeline = (messages: ConversationMessag
   });
 };
 
-export const buildConversationTitle = (value: string): string | null => {
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  return trimmed.length > 40 ? `${trimmed.slice(0, 40)}...` : trimmed;
-};
-
 export const normalizeProjectFiles = (rawFiles: unknown): Record<string, { code: string }> | null => {
   if (!rawFiles || typeof rawFiles !== "object") return null;
   const next: Record<string, { code: string }> = {};
@@ -131,40 +126,41 @@ export const normalizeProjectFiles = (rawFiles: unknown): Record<string, { code:
   return Object.keys(next).length > 0 ? next : null;
 };
 
+export const getSkillDisplayName = (name: string) => name === "plugin-creator" ? "Plugin Creator" : name;
+
+export const formatUserSkillTag = (skill: string) => {
+  const label = getSkillDisplayName(skill).replace(/[\[\]\\]/g, "");
+  const marker = encodeURIComponent(skill).replace(/\(/g, "%28").replace(/\)/g, "%29");
+  return `[${label}](${SKILL_TAG_MARKER_PREFIX}${marker})`;
+};
+
+export const alignUserBubbleSkillTags = (content: string) =>
+  content.replace(/^(\[[^\]\n]+\]\(SKILLTAG:[^)\n]+\)(?: +\[[^\]\n]+\]\(SKILLTAG:[^)\n]+\))*)\n\n(?=[^\s#`>])/, "$1 ");
+
 export const buildUserBubbleContent = ({
   text,
+  bubbleText,
   files: _files,
   selectedSkills,
   selectedFilePaths: _selectedFilePaths,
 }: {
   text: string;
+  bubbleText?: string;
   files: UploadedFileArtifact[];
   selectedSkills?: string[];
   selectedFilePaths?: string[];
 }) => {
+  if (bubbleText) return bubbleText.trim();
   const trimmedText = text.trim();
   const skillTagsMarkdown =
     selectedSkills && selectedSkills.length > 0
       ? selectedSkills
-          .map((skill) => `[${skill}](${SKILL_TAG_MARKER_PREFIX}${encodeURIComponent(skill)})`)
+          .map(formatUserSkillTag)
           .join(" ")
       : "";
   // User image previews and selected project files are rendered from artifact/files
   // and additional_kwargs.selectedFilePaths in timeline view, so no FILETAG is emitted.
-  return [skillTagsMarkdown, trimmedText].filter(Boolean).join("\n\n");
-};
-
-export const stripTagMarkersFromUserContent = (content: string): string => {
-  if (!content) return "";
-  const noSkillTags = content.replace(
-    /\[[^\]]+\]\(SKILLTAG:[^)]+\)/g,
-    ""
-  );
-  const noFileTags = noSkillTags.replace(
-    /\[[^\]]+\]\(FILETAG:[^)]+\)/g,
-    ""
-  );
-  return noFileTags;
+  return alignUserBubbleSkillTags([skillTagsMarkdown, trimmedText].filter(Boolean).join("\n\n"));
 };
 
 export const extractSelectedFilePathsFromUserContent = (content: string): string[] => {

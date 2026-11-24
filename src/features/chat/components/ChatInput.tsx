@@ -1,7 +1,7 @@
 import AttachmentFilename from "./AttachmentFilename";
 import ImageCreationTemplates from "./ImageCreationTemplates";
 import { getCloudHostStatusMeta } from "@shared/sandbox/cloudHostStatus";
-import { ChatModeOptions, modeOptions } from "./ChatModeOptions";
+import { ChatModeOptions } from "./ChatModeOptions";
 import {
   Box,
   Button,
@@ -17,6 +17,7 @@ import {
   MenuItem,
   MenuList,
   MenuItemOption,
+  MenuGroup,
   MenuOptionGroup,
   Text,
   Textarea,
@@ -24,7 +25,9 @@ import {
   useToast,
 } from "@chakra-ui/react";
 import {
+  ArrowLeft,
   ArrowUp,
+  Check,
   ChevronRight,
   Cloud,
   CircleAlert,
@@ -32,16 +35,22 @@ import {
   Laptop,
   Layers,
   MessageSquareText,
+  Paperclip,
   Plus,
   Square,
   Settings2,
+  X,
 } from "lucide-react";
+import { PluginIcon } from "@/components/customize/PluginIcon";
+import type { PluginItem } from "@/types/plugin";
+import useDriveConnected from "@/components/agent-workspace/useDriveConnected";
 import LibraryItemIcon from "@/components/agent-workspace/LibraryItemIcon";
 import { getFileIcon } from "@fastgpt/global/common/file/icon";
 import { AgentSkillsIcon } from "@components/common/Icon";
+import { ChatGptPluginsRailIcon, ChatGptSkillsNavIcon } from "@components/customize/CustomizeIcons";
 import { createId } from "@shared/chat/messages";
 import { useTranslation } from "next-i18next";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import MyTooltip from "@/components/ui/MyTooltip";
 
 import {
@@ -52,11 +61,14 @@ import {
   type ReasoningEffortLevel,
 } from "../types/chatInput";
 import type { UploadedFileArtifact } from "../types/fileArtifact";
-import { normalizeAttachmentWorkspacePath, toFileTagLabel } from "../utils/chatPanelUtils";
+import { formatUserSkillTag, normalizeAttachmentWorkspacePath, toFileTagLabel } from "../utils/chatPanelUtils";
 import ModelCascader from "./ModelCascader";
+import { withAuthHeaders } from "@features/auth/client/authClient";
+import ConnectorAttachmentPicker from "./ConnectorAttachmentPicker";
 import LibraryAttachmentPicker from "./LibraryAttachmentPicker";
 import SlashFilePicker from "./SlashFilePicker";
 import SkillMentionPicker from "./SkillMentionPicker";
+import InlineSkillEditor, { decodeSkillTokenName, focusEditor, getEditorSelection, skillToken, skillTokenPattern } from "./InlineSkillEditor";
 
 type LocalInputFile = ChatInputFile & {
   uploadState: "uploading" | "ready" | "error";
@@ -103,13 +115,101 @@ const ChatInput = ({
   onStop,
 }: ChatInputProps) => {
   const toast = useToast();
-  const ModeIcon = modeOptions[mode].Icon;
+  const composerRef = useRef<HTMLDivElement>(null);
+  const addMenuModifiers = useMemo(() => [{
+    name: "anchorToComposer",
+    enabled: true,
+    phase: "beforeRead" as const,
+    fn: ({ state }: { state: {
+      elements: { reference: { getBoundingClientRect: () => DOMRect }; popper: HTMLElement };
+      rects: { reference: { x: number; y: number; width: number; height: number }; popper: { height: number } };
+    } }) => {
+      const composer = composerRef.current?.getBoundingClientRect();
+      if (!composer) return;
+      const { popper } = state.elements;
+      const viewportHeight = popper.ownerDocument.documentElement.clientHeight;
+      const spaceAbove = composer.top - 16;
+      const spaceBelow = viewportHeight - composer.bottom - 16;
+      const availableHeight = spaceAbove >= 240 ? spaceAbove : Math.max(spaceAbove, spaceBelow);
+      popper.style.setProperty("--composer-menu-height", `${Math.max(0, availableHeight)}px`);
+      state.rects.popper.height = popper.offsetHeight;
+      const trigger = state.elements.reference.getBoundingClientRect();
+      const reference = state.rects.reference;
+      state.rects.reference = {
+        x: reference.x + composer.left - trigger.left,
+        y: reference.y + composer.top - trigger.top,
+        width: composer.width,
+        height: composer.height,
+      };
+    },
+  }], []);
+  const [showMenuSkills, setShowMenuSkills] = useState(false);
+  const skillMenuTriggerRef = useRef<HTMLButtonElement>(null);
+  const skillMenuBackRef = useRef<HTMLButtonElement>(null);
+  const showSkillMenuPage = (show: boolean) => {
+    setShowMenuSkills(show);
+    requestAnimationFrame(() => (show ? skillMenuBackRef : skillMenuTriggerRef).current?.focus());
+  };
+  const [composerPlugins, setComposerPlugins] = useState<Array<PluginItem & { chatAction?: { label: string; prompt: string } }>>();
+  const [connectedFileProviders, setConnectedFileProviders] = useState<Set<string>>(() => new Set());
+  const [attachmentProvider, setAttachmentProvider] = useState<"dropbox" | "sharepoint">();
+  const [composerPluginsFailed, setComposerPluginsFailed] = useState(false);
+  const openAddMenu = () => {
+    setShowMenuSkills(false);
+    if (!workspaceComposer?.onOpenPlugins) return;
+    setComposerPlugins(undefined);
+    setComposerPluginsFailed(false);
+    void fetch("/api/plugins", { headers: withAuthHeaders() })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Plugin list request failed");
+        const data: {
+          plugins: PluginItem[];
+          runtimeTools?: { webFetch: boolean; webSearch: boolean; siteStatus: boolean };
+        } = await response.json();
+        const { runtimeTools } = data;
+        const chatActions: Record<string, { label: string; prompt: string }> = {};
+        if (runtimeTools?.webFetch) {
+          chatActions["builtin-web"] = runtimeTools.webSearch
+            ? { label: "联网搜索", prompt: "联网搜索：" }
+            : { label: "读取指定网页", prompt: "请读取这个网页：" };
+        }
+        if (runtimeTools?.siteStatus) {
+          chatActions["builtin-site"] = {
+            label: "查看当前项目站点状态",
+            prompt: "查看当前项目的站点状态。",
+          };
+        }
+        const connectorStatuses = await Promise.allSettled((["dropbox", "sharepoint"] as const).map(async (provider) => {
+          const response = await fetch(`/api/library/connectors/${provider}?status=1`, { headers: withAuthHeaders() });
+          if (!response.ok) return;
+          const status = await response.json();
+          if (status.configured && status.connected) return provider;
+        }));
+        const connected = new Set(connectorStatuses.flatMap((result) =>
+          result.status === "fulfilled" && result.value ? [result.value] : []
+        ));
+        setConnectedFileProviders(connected);
+        setComposerPlugins(data.plugins
+          .filter((plugin) => plugin.installed && plugin.enabled && (
+            plugin.connectorProvider === "google" || plugin.connectorProvider === "dropbox" ||
+            plugin.connectorProvider === "sharepoint" || (plugin.isCustom && plugin.kind === "mcp") ||
+            Object.hasOwn(chatActions, plugin.id)
+          ))
+          .map((plugin) => ({
+            ...plugin,
+            chatAction: Object.hasOwn(chatActions, plugin.id) ? chatActions[plugin.id] : undefined,
+          })));
+      })
+      .catch(() => setComposerPluginsFailed(true));
+  };
   const { t } = useTranslation();
   const theme = useTheme() as Record<string, any>;
   const chatInputTheme = theme?.workspace?.chatInput || {};
   const skillTheme = chatInputTheme?.skillMention || {};
   const pendingLibraryMention = useRef<{text:string;start:number;end:number}>();
   const [libraryQuery, setLibraryQuery] = useState<string>();
+  const [librarySource, setLibrarySource] = useState<"library" | "drive">("library");
+  const driveConnected = useDriveConnected();
   const [imageModeKey,setImageModeKey] = useState<string>();
   const imageMode = Boolean(draftStorageKey && imageModeKey === draftStorageKey);
   const [text, setText] = useState("");
@@ -128,15 +228,8 @@ const ChatInput = ({
     if (!artifactRevision) return;
     setText((draft) => draft ? `${draft}\n\n${artifactRevision.text}` : artifactRevision.text);
     const frame = requestAnimationFrame(() => {
-      const textarea = textAreaRef.current;
-      if (textarea) {
-        textarea.focus();
-        const end = textarea.value.length;
-        textarea.setSelectionRange(end, end);
-        textarea.style.height = `${inputBaseHeight}px`;
-        textarea.style.height = `${Math.max(inputBaseHeight, Math.min(textarea.scrollHeight, 128))}px`;
-        textarea.style.overflowY = textarea.scrollHeight > 128 ? "auto" : "hidden";
-      }
+      const editor = textAreaRef.current;
+      if (editor) focusEditor(editor);
       artifactRevision.onApplied();
     });
     return () => cancelAnimationFrame(frame);
@@ -178,7 +271,8 @@ const ChatInput = ({
   const [fileRange, setFileRange] = useState<{ start: number; end: number } | null>(null);
   const inputBaseHeight = 50;
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const textAreaRef = useRef<HTMLTextAreaElement | null>(null);
+  const textAreaRef = useRef<HTMLDivElement>(null);
+  const editorSelection = useRef<{ start: number; end: number }>();
   const skillPickerRef = useRef<HTMLDivElement | null>(null);
   const filePickerRef = useRef<HTMLDivElement | null>(null);
   const updateTriggerState = useCallback((value: string, cursorPosition: number) => {
@@ -209,12 +303,6 @@ const ChatInput = ({
     setFileRange(null);
     setFileQuery("");
   }, []);
-  const resetTextareaHeight = useCallback(() => {
-    const textarea = textAreaRef.current;
-    if (!textarea) return;
-    textarea.style.height = `${inputBaseHeight}px`;
-    textarea.style.overflowY = "hidden";
-  }, [inputBaseHeight]);
   const isInputLocked = isSending || isSubmitting;
   const hasUploadingFiles = useMemo(
     () => files.some((item) => item.uploadState === "uploading"),
@@ -232,31 +320,65 @@ const ChatInput = ({
       !isSubmitting &&
       !hasUploadingFiles &&
       !hasUploadErrors &&
-      (text.trim().length > 0 || files.length > 0 || selectedFilePaths.length > 0 || selectionQuotes.length > 0),
+      (text.replace(skillTokenPattern(), "").trim().length > 0 || files.length > 0 || selectedFilePaths.length > 0 || selectionQuotes.length > 0),
     [conversationLoading, files.length, hasUploadErrors, hasUploadingFiles, isSending, isSubmitting, selectedFilePaths.length, selectionQuotes.length, text]
   );
-  const selectedSkillList = useMemo(() => {
-    if (Array.isArray(selectedSkills) && selectedSkills.length > 0) {
-      return selectedSkills.filter(Boolean);
-    }
-    return selectedSkill ? [selectedSkill] : [];
-  }, [selectedSkill, selectedSkills]);
-  const commitSelectedSkills = useCallback(
-    (next: string[]) => {
-      if (onChangeSelectedSkills) {
-        onChangeSelectedSkills(next);
-        return;
+  const selectedSkillList = useMemo(
+    () => Array.from(new Set(Array.from(text.matchAll(skillTokenPattern()), (match) => decodeSkillTokenName(match[1])))),
+    [text]
+  );
+
+  useEffect(() => {
+    if (draftStorageKey && loadedDraftKey !== draftStorageKey) return;
+    const requestedSkills = selectedSkills?.length ? selectedSkills : selectedSkill ? [selectedSkill] : [];
+    if (!requestedSkills.some(Boolean)) return;
+
+    setText((current) => {
+      const existing = new Set(Array.from(current.matchAll(skillTokenPattern()), (match) => decodeSkillTokenName(match[1])));
+      const additions = Array.from(new Set(requestedSkills.filter((name) => name && !existing.has(name))), skillToken);
+      if (additions.length === 0) return current;
+      return current + (current && !/\s$/.test(current) ? " " : "") + additions.join(" ") + " ";
+    });
+    if (onChangeSelectedSkills) onChangeSelectedSkills([]);
+    else onChangeSelectedSkill?.(undefined);
+  }, [draftStorageKey, loadedDraftKey, onChangeSelectedSkill, onChangeSelectedSkills, selectedSkill, selectedSkills]);
+
+  const [disabledManagedSkills, setDisabledManagedSkills] = useState<Set<string>>(() => new Set());
+  const [customSkillOptions, setCustomSkillOptions] = useState<Array<{ name: string; description?: string }>>([]);
+  const managedSkillsRevision = workspaceComposer?.managedSkillsRevision;
+  useEffect(() => {
+    if (managedSkillsRevision === undefined) return;
+    const controller = new AbortController();
+    void fetch("/api/skills", { signal: controller.signal, cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) return;
+        const { skills }: { skills: Array<{ name: string; description?: string; enabled: boolean; category: string }> } = await response.json();
+        if (!controller.signal.aborted) {
+          setCustomSkillOptions(skills.filter((skill) => skill.category === "custom" && skill.enabled));
+          setDisabledManagedSkills(new Set(skills
+            .filter((skill) => skill.category === "builtin" && !skill.enabled)
+            .map((skill) => skill.name)));
+        }
+      })
+      .catch(() => {});
+    return () => controller.abort();
+  }, [managedSkillsRevision]);
+
+  const availableSkillOptions = useMemo(
+    () => {
+      const available = new Map(customSkillOptions.map((skill) => [skill.name.toLowerCase(), skill]));
+      for (const skill of skillOptions) {
+        if (skill.name && !disabledManagedSkills.has(skill.name)) available.set(skill.name.toLowerCase(), skill);
       }
-      onChangeSelectedSkill?.(next[0]);
+      return Array.from(available.values());
     },
-    [onChangeSelectedSkill, onChangeSelectedSkills]
+    [customSkillOptions, disabledManagedSkills, skillOptions]
   );
 
   const filteredSkillOptions = useMemo(() => {
     const keyword = skillQuery.trim();
     const selectedSet = new Set(selectedSkillList);
-    const all = skillOptions.filter((item) => Boolean(item.name));
-    const ranked = all.sort((a, b) => {
+    const ranked = [...availableSkillOptions].sort((a, b) => {
       const aSelected = selectedSet.has(a.name) ? 1 : 0;
       const bSelected = selectedSet.has(b.name) ? 1 : 0;
       // Unselected first, selected later (still visible).
@@ -274,7 +396,7 @@ const ChatInput = ({
       })
       .slice(0, 8);
     return [...matches, library];
-  }, [selectedSkillList, skillOptions, skillQuery]);
+  }, [availableSkillOptions, selectedSkillList, skillQuery]);
   const showSkillPicker =
     Boolean(mentionRange) &&
     !isSending &&
@@ -331,21 +453,13 @@ const ChatInput = ({
       if (!current) return prefillText.trim();
       return `${prev}\n${prefillText.trim()}`;
     });
-    setTimeout(() => {
-      const textarea = textAreaRef.current;
-      if (!textarea) return;
-      textarea.focus();
-      resetTextareaHeight();
-      const nextHeight = Math.max(inputBaseHeight, Math.min(textarea.scrollHeight, 128));
-      textarea.style.height = `${nextHeight}px`;
-      textarea.style.overflowY = textarea.scrollHeight > 128 ? "auto" : "hidden";
-    }, 0);
-  }, [inputBaseHeight, prefillText, prefillVersion, resetTextareaHeight]);
+    const frame = requestAnimationFrame(() => {
+      const editor = textAreaRef.current;
+      if (editor) focusEditor(editor);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [prefillText, prefillVersion]);
 
-  useEffect(() => {
-    if (text.length > 0) return;
-    resetTextareaHeight();
-  }, [resetTextareaHeight, text]);
   useEffect(() => {
     setActiveSkillIndex(0);
   }, [skillQuery, showSkillPicker]);
@@ -385,61 +499,37 @@ const ChatInput = ({
         setLibraryQuery(/^(资料空间|文件|页面|library|drive|google)$/i.test(query) ? "" : query);
         return;
       }
-      const next = selectedSkillList.includes(skillName)
-        ? selectedSkillList
-        : [...selectedSkillList, skillName];
-      commitSelectedSkills(next);
-      if (!mentionRange) return;
-      const beforeMention = text.slice(0, mentionRange.start);
-      const afterMention = text.slice(mentionRange.end);
-      const shouldInsertSpacer =
-        beforeMention.length > 0 &&
-        !/\s$/.test(beforeMention) &&
-        afterMention.length > 0 &&
-        !/^\s/.test(afterMention);
-      const nextText = `${beforeMention}${shouldInsertSpacer ? " " : ""}${afterMention}`.replace(
-        /\s{2,}/g,
-        " "
-      );
-      setText(nextText);
+      const range = mentionRange ?? editorSelection.current ?? { start: text.length, end: text.length };
+      const before = text.slice(0, range.start);
+      const after = text.slice(range.end);
+      const token = skillToken(skillName);
+      const insertion = `${before && !/\s$/.test(before) ? " " : ""}${token} `;
+      setText(before + insertion + after);
       setMentionRange(null);
       setSkillQuery("");
-      window.requestAnimationFrame(() => {
-        const textarea = textAreaRef.current;
-        if (!textarea) return;
-        const cursor = Math.max(0, beforeMention.length + (shouldInsertSpacer ? 1 : 0));
-        textarea.focus();
-        textarea.setSelectionRange(cursor, cursor);
-        resetTextareaHeight();
-        const nextHeight = Math.max(inputBaseHeight, Math.min(textarea.scrollHeight, 128));
-        textarea.style.height = `${nextHeight}px`;
-        textarea.style.overflowY = textarea.scrollHeight > 128 ? "auto" : "hidden";
+      requestAnimationFrame(() => {
+        const editor = textAreaRef.current;
+        if (editor) focusEditor(editor, before.length + insertion.length);
       });
     },
-    [commitSelectedSkills, inputBaseHeight, mentionRange, resetTextareaHeight, selectedSkillList, text]
+    [mentionRange, text]
   );
   const applySelectedFile = useCallback(
     (filePath: string) => {
       if (!fileRange) return;
       const normalizedPath = normalizeAttachmentWorkspacePath(filePath);
-      const nextText = `${text.slice(0, fileRange.start)}${text.slice(fileRange.end)}`.replace(/\s{2,}/g, " ");
+      const nextText = `${text.slice(0, fileRange.start)}${text.slice(fileRange.end)}`;
       const nextCursor = fileRange.start;
       setText(nextText);
       setSelectedFilePaths((prev) => (prev.includes(normalizedPath) ? prev : [...prev, normalizedPath]));
       setFileRange(null);
       setFileQuery("");
-      window.requestAnimationFrame(() => {
-        const textarea = textAreaRef.current;
-        if (!textarea) return;
-        textarea.focus();
-        textarea.setSelectionRange(nextCursor, nextCursor);
-        resetTextareaHeight();
-        const nextHeight = Math.max(inputBaseHeight, Math.min(textarea.scrollHeight, 128));
-        textarea.style.height = `${nextHeight}px`;
-        textarea.style.overflowY = textarea.scrollHeight > 128 ? "auto" : "hidden";
+      requestAnimationFrame(() => {
+        const editor = textAreaRef.current;
+        if (editor) focusEditor(editor, nextCursor);
       });
     },
-    [fileRange, inputBaseHeight, resetTextareaHeight, text]
+    [fileRange, text]
   );
 
   const uploadSingleFile = useCallback(
@@ -536,6 +626,16 @@ const ChatInput = ({
     },
     [uploadSingleFile]
   );
+  const pendingDraftFocus = useRef<{ key: string | undefined; draftText: string }>();
+  useLayoutEffect(() => {
+    const pending = pendingDraftFocus.current;
+    const editor = textAreaRef.current;
+    if (!pending || !editor || isInputLocked || conversationLoading ||
+      pending.key !== draftStorageKey || !text.endsWith(pending.draftText)) return;
+    pendingDraftFocus.current = undefined;
+    focusEditor(editor);
+  }, [conversationLoading, draftStorageKey, isInputLocked, text]);
+
   const consumedLibraryDrafts = useRef(new WeakSet<object>());
   useEffect(() => {
     const draft = workspaceComposer?.libraryDraft;
@@ -547,10 +647,16 @@ const ChatInput = ({
       try { sessionStorage.setItem(draftStorageKey+":image-mode","1"); } catch {}
       requestAnimationFrame(() => textAreaRef.current?.focus());
     }
-    const incomingText = draft.text;
-    if (incomingText) {
-      setText(previous => previous ? previous.trimEnd() + "\n\n" + incomingText : incomingText);
-      requestAnimationFrame(() => textAreaRef.current?.focus());
+    let draftText = draft.text ?? "";
+    for (const name of new Set(draft.skills)) {
+      const mention = `@${name}`;
+      draftText = draftText.includes(mention)
+        ? draftText.replace(mention, () => skillToken(name))
+        : [skillToken(name), draftText].filter(Boolean).join(" ");
+    }
+    if (draftText) {
+      pendingDraftFocus.current = { key: draftStorageKey, draftText };
+      setText((previous) => previous ? previous + "\n\n" + draftText : draftText);
     }
     if (draft.files.length) void onPickFiles(draft.files);
     workspaceComposer?.onLibraryDraftConsumed?.();
@@ -577,8 +683,13 @@ const ChatInput = ({
       .map((item) => item.uploadedArtifact)
       .filter((item): item is UploadedFileArtifact => Boolean(item));
 
+    const message = text.replace(skillTokenPattern(), "").trim();
     const payload: ChatInputSubmitPayload = {
-      text: imageMode ? "创建图像：" + text.trim() : text.trim(),
+      text: imageMode ? "创建图像：" + message : message,
+      ...(selectedSkillList.length > 0 ? {
+        bubbleText: (imageMode ? "创建图像：" : "") +
+          text.replace(skillTokenPattern(), (_, name: string) => formatUserSkillTag(decodeSkillTokenName(name))).trim(),
+      } : {}),
       files: selectedFiles,
       uploadedFiles,
       selectedSkill: selectedSkillList[0] || undefined,
@@ -597,7 +708,6 @@ const ChatInput = ({
         setText("");
         setFiles([]);
         setSelectedFilePaths([]);
-        resetTextareaHeight();
         if (fileInputRef.current) fileInputRef.current.value = "";
       } });
     } catch {
@@ -605,11 +715,12 @@ const ChatInput = ({
     } finally {
       setIsSubmitting(false);
     }
-  }, [canSend, imageMode, draftStorageKey, files, onSend, toast, reasoningEffort, resetTextareaHeight, selectedFilePaths, selectionQuotes, text, selectedSkillList, thinkingEnabled, showThinkingToggle, workspaceLayout]);
+  }, [canSend, imageMode, draftStorageKey, files, onSend, toast, reasoningEffort, selectedFilePaths, selectionQuotes, text, selectedSkillList, thinkingEnabled, showThinkingToggle, workspaceLayout]);
 
   return (
     <Box px={4} py={3}>
       <Flex
+        ref={composerRef}
         bg="white"
         border={workspaceLayout ? "1px solid" : "0.5px solid"}
         borderColor={
@@ -793,71 +904,51 @@ const ChatInput = ({
                 try { sessionStorage.removeItem(draftStorageKey+":image-mode"); } catch {}
                 textAreaRef.current?.focus();
               }}/></Flex>}
-            {selectedSkillList.length > 0 || selectedFilePaths.length > 0 ? (
-              <Flex px={2} pt={2}>
+            {selectedFilePaths.length > 0 ? (
+              <Flex px={3} pt={2.5} pb={0.5}>
                 <Flex align="center" gap={1.5} wrap="wrap">
-                  {selectedSkillList.map((skill) => (
-                    <Flex
-                      key={skill}
-                      align="center"
-                      bg={skillTheme.bg || "adora.50"}
-                      border="1px solid"
-                      borderColor={skillTheme.borderColor || "adora.300"}
-                      borderRadius="10px"
-                      color={skillTheme.color || "adora.800"}
-                      gap={1}
-                      h="28px"
-                      maxW="280px"
-                      pl={2.5}
-                      pr={1}
-                    >
-                      <Box as={AgentSkillsIcon} color={skillTheme.labelColor || "adora.700"} h="13px" w="13px" />
-                      <Text fontSize="13px" fontWeight={600} noOfLines={1}>
-                        {skill}
-                      </Text>
-                      <CloseButton
-                        color={skillTheme.labelColor || "adora.700"}
-                        onClick={() => {
-                          const next = selectedSkillList.filter((item) => item !== skill);
-                          commitSelectedSkills(next);
-                        }}
-                        aria-label={`移除技能 ${skill}`}
-                        size="sm"
-                        transform="scale(0.88)"
-                      />
-                    </Flex>
-                  ))}
                   {selectedFilePaths.map((filePath) => {
                     const fileLabel = toFileTagLabel(filePath);
                     return (
                       <Flex
                         key={filePath}
+                        role="group"
                         align="center"
-                        bg="white"
-                        border="1px solid"
-                        borderColor="#E2E8F0"
-                        borderRadius="10px"
-                        boxShadow="0px 2.571px 6.429px 0px rgba(19, 51, 107, 0.08), 0px 0px 0.643px 0px rgba(19, 51, 107, 0.08)"
-                        color="gray.700"
-                        gap={2}
-                        h="28px"
-                        maxW="320px"
+                        bg="#F4F4F5"
+                        borderRadius="8px"
+                        color="#18181B"
+                        gap={1.5}
+                        h="24px"
+                        maxW="300px"
                         pl={2}
                         pr={1}
+                        transition="all 0.15s ease"
+                        _hover={{ bg: "#E4E4E7" }}
                       >
-                        <LibraryItemIcon item={{name:fileLabel}} compact/>
-                        <Text fontSize="12px" fontWeight={600} noOfLines={1}>
+                        <LibraryItemIcon item={{ name: fileLabel }} compact />
+                        <Text fontSize="12px" fontWeight={500} noOfLines={1} title={filePath}>
                           {fileLabel}
                         </Text>
-                        <CloseButton
-                          color="gray.500"
+                        <Box
+                          as="button"
+                          type="button"
                           onClick={() => {
                             setSelectedFilePaths((prev) => prev.filter((item) => item !== filePath));
                           }}
                           aria-label={`移除文件 ${fileLabel}`}
-                          size="sm"
-                          transform="scale(0.88)"
-                        />
+                          display="flex"
+                          alignItems="center"
+                          justifyContent="center"
+                          w="16px"
+                          h="16px"
+                          borderRadius="full"
+                          color="#71717A"
+                          opacity={0.75}
+                          transition="all 0.15s ease"
+                          _hover={{ opacity: 1, bg: "rgba(0, 0, 0, 0.08)", color: "#18181B" }}
+                        >
+                          <X size={11} />
+                        </Box>
                       </Flex>
                     );
                   })}
@@ -865,24 +956,17 @@ const ChatInput = ({
               </Flex>
             ) : null}
             <Flex align="center" gap={2} px={3} pt={3}>
-              <Textarea
-                ref={textAreaRef}
-                _focusVisible={{ border: "none", boxShadow: "none" }}
-                _placeholder={{
-                  color: "#707070",
-                  fontSize: "15px",
-                }}
-                border="none"
-                color="myGray.700"
-                flex="1"
-                fontSize="15px"
-                fontWeight={400}
-                lineHeight="1.45"
-                maxH="128px"
-                mb={0}
-                minH={`${inputBaseHeight}px`}
-                isDisabled={isInputLocked}
+              <InlineSkillEditor
+                editorRef={textAreaRef}
+                value={text}
+                placeholder={inputPlaceholder}
+                disabled={isInputLocked}
+                minHeight={inputBaseHeight}
+                maxHeight={128}
+                onFocus={() => setIsFocused(true)}
                 onBlur={() => {
+                  const editor = textAreaRef.current;
+                  if (editor) editorSelection.current = getEditorSelection(editor);
                   setIsFocused(false);
                   window.setTimeout(() => {
                     setMentionRange(null);
@@ -891,17 +975,10 @@ const ChatInput = ({
                     setFileQuery("");
                   }, 80);
                 }}
-                onChange={(event) => {
-                  const nextValue = event.target.value;
+                onChange={(nextValue, caretOffset) => {
                   setText(nextValue);
-                  updateTriggerState(nextValue, event.target.selectionStart ?? nextValue.length);
-                  const textarea = event.target;
-                  resetTextareaHeight();
-                  const nextHeight = Math.max(inputBaseHeight, Math.min(textarea.scrollHeight, 128));
-                  textarea.style.height = `${nextHeight}px`;
-                  textarea.style.overflowY = textarea.scrollHeight > 128 ? "auto" : "hidden";
+                  updateTriggerState(nextValue, caretOffset);
                 }}
-                onFocus={() => setIsFocused(true)}
                 onPaste={(event) => {
                   if (isInputLocked) return;
                   const pastedFiles = getPastedFiles(event.clipboardData);
@@ -913,6 +990,13 @@ const ChatInput = ({
                 }}
                 onKeyDown={(event) => {
                   if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+                  if (event.key === "Backspace" && !text && !showFilePicker && !showSkillPicker) {
+                    if (selectedFilePaths.length > 0) {
+                      event.preventDefault();
+                      setSelectedFilePaths((prev) => prev.slice(0, -1));
+                      return;
+                    }
+                  }
                   if (showFilePicker) {
                     if (event.key === "ArrowDown") {
                       event.preventDefault();
@@ -952,7 +1036,7 @@ const ChatInput = ({
                       );
                       return;
                     }
-                    if (event.key === "Enter" && !event.shiftKey) {
+                    if ((event.key === "Enter" && !event.shiftKey) || event.key === "Tab") {
                       event.preventDefault();
                       const picked = filteredSkillOptions[activeSkillIndex];
                       if (picked?.name) {
@@ -960,14 +1044,6 @@ const ChatInput = ({
                       } else {
                         setMentionRange(null);
                         setSkillQuery("");
-                      }
-                      return;
-                    }
-                    if (event.key === "Tab") {
-                      event.preventDefault();
-                      const picked = filteredSkillOptions[activeSkillIndex];
-                      if (picked?.name) {
-                        applySelectedSkill(picked.name);
                       }
                       return;
                     }
@@ -983,16 +1059,6 @@ const ChatInput = ({
                     handleSend();
                   }
                 }}
-                overflowX="hidden"
-                overflowY="hidden"
-                aria-label={placeholder ?? t("chat:ready_start", { defaultValue: "输入消息" })}
-                placeholder={inputPlaceholder}
-                px={2}
-                resize="none"
-                rows={1}
-                value={text}
-                w="100%"
-                whiteSpace="pre-wrap"
               />
             </Flex>
             {showFilePicker ? (
@@ -1023,15 +1089,174 @@ const ChatInput = ({
               type="file"
               multiple
             />
-            <Menu placement="top-start" isLazy>
-              <MenuButton as={IconButton} aria-label="添加文件" icon={<Plus size={18} strokeWidth={1.8}/>}
+            <Menu placement="top-start" matchWidth modifiers={addMenuModifiers} isLazy onOpen={openAddMenu}>
+              <MenuButton as={IconButton} aria-label="添加文件和工具" icon={<Plus size={18} strokeWidth={1.8}/>}
                 isDisabled={isSending || isSubmitting} size="sm" variant="ghost" borderRadius="full"/>
-              <Portal><MenuList>
-                <MenuItem onClick={() => fileInputRef.current?.click()}>从本机上传</MenuItem>
-                <MenuItem onClick={() => setLibraryQuery("")}>从资料空间添加</MenuItem>
-              </MenuList></Portal>
+              <Portal>
+                <MenuList w="full" minW={0} maxH="min(440px, 65dvh, var(--composer-menu-height, 440px))" overflowY="auto" overscrollBehavior="contain"
+                  borderRadius="16px" p={1.5} borderColor="gray.200" boxShadow="lg"
+                  sx={{ ".chakra-menu__menuitem": { borderRadius: "9px", minHeight: "34px" } }}>
+                  {showMenuSkills ? (
+                    <>
+                      <MenuItem ref={skillMenuBackRef} icon={<ArrowLeft size={16} />} closeOnSelect={false} onClick={() => showSkillMenuPage(false)}>
+                        返回添加菜单
+                      </MenuItem>
+                      <MenuDivider />
+                      {availableSkillOptions.length === 0 ? (
+                        <MenuItem fontSize="13px" borderRadius="8px" isDisabled>
+                          暂无可用技能
+                        </MenuItem>
+                      ) : (
+                        availableSkillOptions.map((skill) => {
+                          const checked = selectedSkillList.includes(skill.name);
+                          return (
+                            <MenuItem
+                              key={skill.name}
+                              borderRadius="10px"
+                              px={2.5}
+                              py={2}
+                              bg={checked ? "rgba(2, 133, 255, 0.06)" : "transparent"}
+                              _hover={{ bg: checked ? "rgba(2, 133, 255, 0.1)" : "#F4F4F5" }}
+                              onClick={() => {
+                                if (!checked) {
+                                  applySelectedSkill(skill.name);
+                                  return;
+                                }
+                                setText((current) => current.replace(skillTokenPattern(), (token, name) =>
+                                  decodeSkillTokenName(name) === skill.name ? "" : token
+                                ));
+                              }}
+                            >
+                              <HStack justify="space-between" w="full" spacing={2.5}>
+                                <Flex align="center" gap={2} minW={0}>
+                                  <Box color={checked ? "#0285FF" : "#6B7280"} flexShrink={0}>
+                                    <ChatGptSkillsNavIcon size={14} />
+                                  </Box>
+                                  <Box minW={0}>
+                                    <Text fontSize="13px" fontWeight={checked ? "600" : "500"} color="#111827" noOfLines={1}>
+                                      {skill.name}
+                                    </Text>
+                                    {skill.description && (
+                                      <Text fontSize="11px" color="#6B7280" noOfLines={1}>
+                                        {skill.description}
+                                      </Text>
+                                    )}
+                                  </Box>
+                                </Flex>
+                                {checked ? (
+                                  <Box color="#0285FF" flexShrink={0}>
+                                    <Check size={14} />
+                                  </Box>
+                                ) : null}
+                              </HStack>
+                            </MenuItem>
+                          );
+                        })
+                      )}
+                      {workspaceComposer?.onOpenSkills && (
+                        <>
+                          <MenuDivider />
+                          <MenuItem icon={<ChatGptSkillsNavIcon size={16} />} onClick={workspaceComposer.onOpenSkills}>
+                            管理技能
+                          </MenuItem>
+                        </>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <MenuGroup title="添加">
+                        <MenuItem icon={<Paperclip size={16} />} onClick={() => fileInputRef.current?.click()}>从本机上传</MenuItem>
+                        <MenuItem icon={<Layers size={16} />} onClick={() => setLibraryQuery("")}>从资料空间添加</MenuItem>
+                        <ChatModeOptions mode={mode} onChangeMode={onChangeMode} />
+                        {workspaceLayout && showThinkingToggle && (
+                          <MenuItem onClick={() => onChangeThinkingEnabled?.(!thinkingEnabled)}>
+                            深度思考：{thinkingEnabled ? "开启" : "关闭"}
+                          </MenuItem>
+                        )}
+                        <MenuItem ref={skillMenuTriggerRef} icon={<ChatGptSkillsNavIcon size={16} />} closeOnSelect={false} onClick={() => showSkillMenuPage(true)}>
+                          <Flex justify="space-between" align="center">
+                            {selectedSkillList.length ? `技能 · ${selectedSkillList.length}` : "技能"}
+                            <ChevronRight size={15} />
+                          </Flex>
+                        </MenuItem>
+                      </MenuGroup>
+                      {workspaceComposer?.onOpenPlugins && (
+                        <MenuGroup title="插件">
+                          {!composerPlugins && !composerPluginsFailed && (
+                            <MenuItem isDisabled>正在加载插件…</MenuItem>
+                          )}
+                          {composerPlugins?.length === 0 && (
+                            <MenuItem isDisabled>暂无已启用的插件</MenuItem>
+                          )}
+                          {composerPlugins?.map((plugin) => (
+                            <MenuItem key={plugin.id} icon={<PluginIcon plugin={plugin} size="sm" />}
+                              onClick={() => {
+                                if (plugin.connectorProvider === "google" && driveConnected) {
+                                  setLibrarySource("drive");
+                                  setLibraryQuery("");
+                                  return;
+                                }
+                                if (plugin.connectorProvider === "dropbox" || plugin.connectorProvider === "sharepoint") {
+                                  if (connectedFileProviders.has(plugin.connectorProvider)) {
+                                    setAttachmentProvider(plugin.connectorProvider);
+                                  } else {
+                                    workspaceComposer.onOpenPlugins?.(plugin.id);
+                                  }
+                                  return;
+                                }
+                                const prompt = plugin.chatAction?.prompt;
+                                if (prompt) {
+                                  setText((current) => current ? `${current}\n${prompt}` : prompt);
+                                  requestAnimationFrame(() => {
+                                    if (textAreaRef.current) focusEditor(textAreaRef.current);
+                                  });
+                                } else {
+                                  workspaceComposer.onOpenPlugins?.(plugin.id);
+                                }
+                              }}>
+                              <Flex align={{ base: "start", sm: "center" }} direction={{ base: "column", sm: "row" }}
+                                columnGap={2} w="full" minW={0}>
+                                <Text fontSize="sm" overflowWrap="anywhere" flexShrink={0} maxW={{ base: "100%", sm: "55%" }}>
+                                  {plugin.name}
+                                </Text>
+                                <Text noOfLines={1} fontSize="xs" color="gray.500">
+                                  {plugin.connectorProvider === "google"
+                                    ? driveConnected ? "从云盘添加文件" : "连接账号"
+                                    : plugin.connectorProvider
+                                      ? connectedFileProviders.has(plugin.connectorProvider) ? "从云盘添加文件" : "连接账号"
+                                      : plugin.chatAction?.label ?? "已启用 · 管理配置"}
+                                </Text>
+                              </Flex>
+                            </MenuItem>
+                          ))}
+                          {workspaceComposer.onAddPlugin && (
+                            <>
+                              <MenuItem icon={<ChatGptPluginsRailIcon size={16} />} onClick={() => workspaceComposer.onAddPlugin?.("upload")}>
+                                导入并安装插件
+                              </MenuItem>
+                              <MenuItem icon={<Plus size={16} />} onClick={() => workspaceComposer.onAddPlugin?.("mcp")}>
+                                添加 MCP 插件
+                              </MenuItem>
+                            </>
+                          )}
+                          <MenuItem icon={<ChatGptPluginsRailIcon size={16} />} onClick={() => workspaceComposer.onOpenPlugins?.()}>
+                            {composerPluginsFailed ? "打开插件页查看" : "管理插件"}
+                          </MenuItem>
+                        </MenuGroup>
+                      )}
+                    </>
+                  )}
+                </MenuList>
+              </Portal>
             </Menu>
-            {libraryQuery !== undefined && <LibraryAttachmentPicker finalFocusRef={textAreaRef} initialQuery={libraryQuery} onClose={() => {
+            {attachmentProvider && <ConnectorAttachmentPicker
+              provider={attachmentProvider}
+              finalFocusRef={textAreaRef}
+              onClose={() => setAttachmentProvider(undefined)}
+              onAdd={(picked) => onPickFiles(picked, true)}
+            />}
+            {libraryQuery !== undefined && <LibraryAttachmentPicker finalFocusRef={textAreaRef} initialQuery={libraryQuery} initialSource={librarySource} onClose={() => {
+              setLibrarySource("library");
               pendingLibraryMention.current = undefined;
               setLibraryQuery(undefined);
             }} onAdd={async picked => {
@@ -1051,31 +1276,39 @@ const ChatInput = ({
                     <MenuButton as={Button} size="xs" h="30px" px={2.5} maxW="150px" variant="ghost"
                       borderRadius="full" fontSize="12.5px" fontWeight="500" color="#374151"
                       _hover={{ bg: "#f4f4f5" }}
-                      aria-label={workspaceComposer.deviceAccessKind ? `访问设备：${workspaceComposer.deviceAccessLabel}` : "访问设备"}
+                      aria-label={`访问设备：${workspaceComposer.deviceAccessLabel}`}
                       isLoading={workspaceComposer.requestingDeviceAccess} loadingText="等待授权"
-                      leftIcon={workspaceComposer.deviceAccessKind === "remote-vm" ? <Cloud size={14} /> : <Laptop size={14} />}
+                      leftIcon={(workspaceComposer.deviceAccessKind ?? workspaceComposer.projectDeviceKind) === "remote-vm" ? <Cloud size={14} /> : <Laptop size={14} />}
                       rightIcon={<ChevronRight size={13} color="#9ca3af" />}>
                       <Text as="span" isTruncated>{workspaceComposer.deviceAccessLabel || "访问设备"}</Text>
                     </MenuButton>
                     <Portal>
                       <MenuList w="min(320px, calc(100vw - 24px))" minW={0} maxH="65dvh" overflowY="auto"
                         p={2} borderRadius="14px" border="1px solid #dfe5ef" boxShadow="0 10px 36px rgba(33,48,78,.13)">
-                        <MenuOptionGroup type="radio" title="允许 AI 访问"
-                          value={workspaceComposer.selectedDeviceId || workspaceComposer.deviceAccessKind || "none"}
+                        <MenuOptionGroup type="radio" title="AI 访问设备"
+                          value={workspaceComposer.selectedDeviceId || workspaceComposer.deviceAccessKind || "project"}
                           onChange={value => {
-                            if (value === "none") workspaceComposer.onClearDeviceAccess?.();
+                            if (value === "project") workspaceComposer.onClearDeviceAccess?.();
                             else if (value === "remote-vm") workspaceComposer.onSelectCloudHost?.();
                             else {
                               const device = workspaceComposer.devices?.find(item => item.deviceId === value);
                               if (device) workspaceComposer.onSelectDeviceHost?.(device);
                             }
                           }}>
-                          <MenuItemOption value="none">仅使用项目工作空间</MenuItemOption>
+                          <MenuItemOption value="project">
+                            <HStack minW={0}>
+                              {workspaceComposer.projectDeviceKind === "connector" ? <Laptop size={16} /> : <Cloud size={16} />}
+                              <Text noOfLines={1}>{workspaceComposer.projectDeviceLabel}</Text>
+                              <Text fontSize="xs" color="ink.muted" flexShrink={0}>项目默认</Text>
+                            </HStack>
+                          </MenuItemOption>
+                          {(workspaceComposer.projectDeviceKind !== "remote-vm" || workspaceComposer.deviceAccessKind === "remote-vm") && (
                           <MenuItemOption value="remote-vm">
                             <HStack><Cloud size={16} /><Text>云电脑</Text>
                               <Text fontSize="xs" color="ink.muted">{getCloudHostStatusMeta(workspaceComposer.cloudHostStatus).label}</Text>
                             </HStack>
                           </MenuItemOption>
+                          )}
                           {workspaceComposer.devices?.map(device => (
                             <MenuItemOption key={device.deviceId} value={device.deviceId} isDisabled={!device.online}>
                               <HStack minW={0}><Laptop size={16} /><Text noOfLines={1}>{device.name}</Text>
@@ -1092,89 +1325,6 @@ const ChatInput = ({
                   </Menu>
                 )}
 
-                <Menu placement="top-start" isLazy>
-                  <MenuButton
-                    as={Button}
-                    size="xs"
-                    h="30px"
-                    px={2.5}
-                    borderRadius="full"
-                    variant="ghost"
-                    fontSize="12.5px"
-                    fontWeight="500"
-                    color="#374151"
-                    _hover={{ bg: "#f4f4f5" }}
-                    leftIcon={<Layers size={14} />}
-                    rightIcon={<ChevronRight size={13} color="#9ca3af" />}
-                    flexShrink={0}
-                  >
-                    技能
-                  </MenuButton>
-                  <MenuList minW="210px" maxH="260px" overflowY="auto">
-                    {skillOptions.length === 0 ? (
-                      <MenuItem fontSize="13px" isDisabled>
-                        暂无可用技能
-                      </MenuItem>
-                    ) : (
-                      skillOptions.map((skill) => {
-                        const checked = selectedSkillList.includes(skill.name);
-                        return (
-                          <MenuItem
-                            key={skill.name}
-                            fontSize="13px"
-                            fontWeight={checked ? "600" : "400"}
-                            onClick={() => {
-                              const next = checked
-                                ? selectedSkillList.filter((s) => s !== skill.name)
-                                : [...selectedSkillList, skill.name];
-                              commitSelectedSkills(next);
-                            }}
-                          >
-                            <HStack justify="space-between" w="full">
-                              <Text noOfLines={1}>{skill.name}</Text>
-                              {checked ? <Text color="blue.600" fontSize="xs">已选</Text> : null}
-                            </HStack>
-                          </MenuItem>
-                        );
-                      })
-                    )}
-                  </MenuList>
-                </Menu>
-
-                <Menu placement="top-start" isLazy>
-                  <MenuButton
-                    as={Button}
-                    size="xs"
-                    h="30px"
-                    px={2.5}
-                    borderRadius="full"
-                    variant="ghost"
-                    fontSize="12.5px"
-                    fontWeight="500"
-                    color="#374151"
-                    bg={mode === "default" ? "transparent" : "#f3f3f3"}
-                    _hover={{ bg: "#ededed" }}
-                    leftIcon={<ModeIcon size={15} />}
-                    rightIcon={<ChevronRight size={13} color="#9ca3af" />}
-                    flexShrink={0}
-                  >
-                    {modeOptions[mode].label}
-                  </MenuButton>
-                  <MenuList minW="160px">
-                    <ChatModeOptions mode={mode} onChangeMode={onChangeMode} />
-                    {showThinkingToggle && (
-                      <>
-                        <MenuDivider />
-                        <MenuItem
-                          fontSize="13px"
-                          onClick={() => onChangeThinkingEnabled?.(!thinkingEnabled)}
-                        >
-                          深度思考：{thinkingEnabled ? "开启" : "关闭"}
-                        </MenuItem>
-                      </>
-                    )}
-                  </MenuList>
-                </Menu>
                 <Box flex={1} />
               </>
             ) : (
@@ -1248,14 +1398,6 @@ const ChatInput = ({
                     />
                   </MyTooltip>
                 ) : null}
-                <Menu>
-                  <MenuButton as={Button} size="sm" variant="ghost" isDisabled={Boolean(isSending || isSubmitting)} aria-label="选择工作模式" leftIcon={<ModeIcon size={15} />}>
-                    {mode === "goal" ? "目标" : mode === "plan" ? "计划" : "执行"}
-                  </MenuButton>
-                  <MenuList>
-                    <ChatModeOptions mode={mode} onChangeMode={onChangeMode} />
-                  </MenuList>
-                </Menu>
               </>
             )}
             {hasUploadingFiles ? (

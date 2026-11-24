@@ -1183,6 +1183,7 @@ const ChatPanel = ({
 
       const userBubbleContent = buildUserBubbleContent({
         text,
+        bubbleText: payload.bubbleText,
         files: finalArtifacts,
         selectedSkills: payload.selectedSkills || (payload.selectedSkill ? [payload.selectedSkill] : undefined),
         selectedFilePaths: payload.selectedFilePaths,

@@ -47,10 +47,21 @@ const plugin: AgentPlugin = {
 
 ```env
 AGENT_PLUGINS={"enabled":["reports"],"disabled":["web"]}
-AGENT_MCP_SERVERS=[{"name":"example","transport":"http","url":"http://127.0.0.1:9000/mcp"}]
 ```
 
+MCP 服务器由用户在插件页添加或导入，启用后只加载当前账号安装的 MCP。
+
 禁用优先于启用；重复工具名（不区分大小写）、无效 manifest、未知插件 ID、缺失必要环境变量会显式报错。初始化失败会释放已获取的插件资源。每轮都有独立 registry，不影响其他项目或会话。
+
+## 插件与技能
+
+插件页显示内置工具和当前账号自己的插件。用户通过表单或压缩包安装 MCP 后，服务端按账号保存配置。响应会省略认证凭据，运行时仅为当前账号发现已安装且启用的工具。插件详情的「测试连接」使用同一套工具发现逻辑。
+
+MCP 服务使用公开 HTTPS 上的 Streamable HTTP。连接层校验并固定公网地址，保留原域名的 TLS 校验。系统 DNS 只返回 Fake IP 时，通过 HTTPS DNS 复查域名后重新校验公网地址。压缩包只读取配置清单，其中文件不会作为 Node 模块执行。
+
+创建插件从新对话里的 `plugin-creator` 技能开始。该技能基于 OpenAI 公开的脚手架，并附有伯仁安装包生成脚本。技能以运行时名称发送，界面保留标签在正文中的位置。停用的内置技能会从候选和内置运行时目录中移除。
+
+插件与技能状态默认写入进程目录下的 `data/`，可用 `AISTUDIO_CUSTOMIZATION_DIR` 指定持久化目录。Docker Compose 默认挂载 `data/customization/`。
 
 ## 工具与提示词一致性
 
