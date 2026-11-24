@@ -144,6 +144,7 @@ struct ApprovalCard: View {
         return FileManager.default.fileExists(atPath: folder, isDirectory: &directory) && directory.boolValue
     }
     private var accountApproval: Bool { input.mode == "accountApprove" }
+    private var browserApproval: Bool { input.mode == "browserApprove" }
     private var pairing: Bool { input.mode == "pairApprove" }
     private var messageContent: some View {
         Text(input.message).font(.system(size: 12)).lineSpacing(4)
@@ -153,9 +154,9 @@ struct ApprovalCard: View {
         VStack(spacing: 16) {
             ConnectionMotion(still: preview || reduceMotion, approved: approved, previewPhase: previewPhase)
             VStack(spacing: 7) {
-                Text(approved ? "已确认，正在返回聊天" : pairing ? "连接这台电脑" : accountApproval ? "允许此用户长期访问？" : "允许对话执行本机任务？")
+                Text(approved ? "已确认，正在返回聊天" : pairing ? "连接这台电脑" : browserApproval ? "允许对话操作浏览器？" : accountApproval ? "允许此用户长期访问？" : "允许对话执行本机任务？")
                     .font(.system(size: 22, weight: .semibold))
-                Text(pairing ? "将电脑绑定到当前平台账号，继续在聊天中使用。" : accountApproval ? "此用户的新会话可执行命令，并读取、修改本机文件。" : "此对话将能够执行命令，并读取、修改本机文件。")
+                Text(pairing ? "将电脑绑定到当前平台账号，继续在聊天中使用。" : browserApproval ? "此对话可读取和操作所选浏览器页面。" : accountApproval ? "此用户的新会话可执行命令，并读取、修改本机文件。" : "此对话将能够执行命令，并读取、修改本机文件。")
                     .font(.system(size: 13)).foregroundColor(.secondary).multilineTextAlignment(.center)
             }
             if pairing {
@@ -172,6 +173,8 @@ struct ApprovalCard: View {
                 Label("绑定后可在本机「已授权用户」中启用长期访问。", systemImage: "checkmark.shield")
                     .font(.system(size: 12)).foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+            } else if browserApproval {
+                ScrollView { messageContent }.frame(height: 170)
             } else {
                 Group {
                     if preview { messageContent } else { ScrollView { messageContent } }
@@ -218,16 +221,16 @@ struct ApprovalCard: View {
                     .font(.system(size: 11)).foregroundColor(.secondary)
                 Spacer()
                 Button("取消") { finish(nil) }.keyboardShortcut(.cancelAction).disabled(approved)
-                Button(approved ? "已确认" : pairing ? "确认绑定" : "允许执行") {
+                Button(approved ? "已确认" : pairing ? "确认绑定" : browserApproval ? "允许操作" : "允许执行") {
                     guard !approved else { return }
                     // 确认无需先更换目录；没有可用目录时才要求选择。
-                    if !pairing && !hasValidFolder {
+                    if !pairing && !browserApproval && !hasValidFolder {
                         chooseFolder()
                         guard hasValidFolder else { return }
                     }
                     withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) { approved = true }
                     DispatchQueue.main.asyncAfter(deadline: .now() + (reduceMotion ? 0 : 0.45)) {
-                        finish(pairing ? "confirmed" : folder)
+                        finish(pairing || browserApproval ? "confirmed" : folder)
                     }
                 }.keyboardShortcut(.defaultAction)
                     .buttonStyle(ConfirmButtonStyle()).disabled(approved)
@@ -878,7 +881,7 @@ struct Main {
         }
         let data = FileHandle.standardInput.readDataToEndOfFile()
         guard let input = try? JSONDecoder().decode(DialogInput.self, from: data),
-              ["approve", "accountApprove", "pairApprove", "settings", "invite", "authorizations"].contains(input.mode) else { Darwin.exit(2) }
+              ["approve", "accountApprove", "pairApprove", "browserApprove", "settings", "invite", "authorizations"].contains(input.mode) else { Darwin.exit(2) }
         #if DEBUG
         if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--render-preview", #available(macOS 13.0, *) {
             if input.mode == "authorizations" {
@@ -903,7 +906,8 @@ struct Main {
         }
         #endif
         let app = NSApplication.shared
-        app.setActivationPolicy(.regular)
+        // Settings and confirmations belong to the tray app and need no separate Dock icon.
+        app.setActivationPolicy(.accessory)
         installEditingMenu()
         let delegate = DialogController(input)
         app.delegate = delegate

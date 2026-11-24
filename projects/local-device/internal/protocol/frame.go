@@ -8,6 +8,7 @@ import (
 	"io"
 	"regexp"
 
+	"fastgpt.local/local-device/internal/browser"
 	"fastgpt.local/local-device/internal/executor"
 	"fastgpt.local/local-device/internal/grant"
 	"fastgpt.local/local-device/internal/journal"
@@ -20,6 +21,8 @@ const MaxFrameBytes = 1024*1024 + 4096
 var identifier = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 
 type Frame struct {
+	BrowserResult  json.RawMessage        `json:"browserResult,omitempty"`
+	BrowserRequest json.RawMessage        `json:"browserRequest,omitempty"`
 	Version        int                    `json:"version"`
 	Type           string                 `json:"type"`
 	Epoch          string                 `json:"epoch"`
@@ -64,13 +67,19 @@ func (f Frame) Validate() error {
 	}
 	if f.ServerTime != 0 {
 		switch f.Type {
-		case "welcome", "auth_refreshed", "grant_request", "grant_renew", "grant_revoke", "exec_start", "exec_cancel", "exec_query", "exec_cancel_query", "exec_output_query":
+		case "welcome", "auth_refreshed", "grant_request", "grant_renew", "grant_revoke", "exec_start", "exec_cancel", "exec_query", "exec_cancel_query", "exec_output_query", "browser_start", "browser_cancel":
 		default:
 			return errors.New("unexpected_server_time")
 		}
 	}
 	if f.Version != Version || !identifier.MatchString(f.Epoch) {
 		return errors.New("invalid_protocol_header")
+	}
+	if f.BrowserResult != nil && f.Type != "browser_result" {
+		return errors.New("unexpected_browser_result")
+	}
+	if f.BrowserRequest != nil && f.Type != "browser_start" {
+		return errors.New("unexpected_browser_request")
 	}
 	if f.Query != nil && f.Type != "exec_query" && f.Type != "exec_cancel_query" {
 		return errors.New("unexpected_query_fields")
@@ -117,6 +126,10 @@ func (f Frame) Validate() error {
 				return errors.New("invalid_grant_scope")
 			}
 		}
+		if mode := f.Grant.BrowserMode; mode != "" &&
+			((mode != "dedicated" && mode != "sharedTab") || f.Grant.Workdir != "") {
+			return errors.New("invalid_browser_grant")
+		}
 		if f.Grant.SourceTarget == "" || f.Grant.ExpiresAt < 0 {
 			return errors.New("invalid_grant_scope")
 		}
@@ -138,6 +151,19 @@ func (f Frame) Validate() error {
 		return errors.New("invalid_request_identity")
 	}
 	switch f.Type {
+	case "browser_result":
+		if len(f.BrowserResult) == 0 || !json.Valid(f.BrowserResult) || f.Request != nil || f.Record != nil || f.Error != "" {
+			return errors.New("invalid_browser_result")
+		}
+	case "browser_error":
+		if f.Request != nil || f.Record != nil || !identifier.MatchString(f.Error) {
+			return errors.New("invalid_browser_error")
+		}
+	case "browser_start":
+		request, err := browser.DecodeRequest(f.BrowserRequest)
+		if err != nil || request.OperationID != f.OperationID || f.Request != nil || f.Record != nil || f.Error != "" {
+			return errors.New("invalid_browser_frame")
+		}
 	case "exec_output_query":
 		q := f.OutputQuery
 		if q == nil || q.ID != f.OperationID || !identifier.MatchString(q.GrantID) || q.GrantVersion < 1 || q.Limit < 1 || q.Limit > 64 || q.After > 9007199254740991 || f.Request != nil || f.Record != nil || f.Error != "" {
@@ -163,7 +189,7 @@ func (f Frame) Validate() error {
 		if f.Query == nil || f.Query.ID != f.OperationID || !identifier.MatchString(f.Query.GrantID) || f.Query.GrantVersion < 1 || f.Request != nil || f.Record != nil || f.Error != "" {
 			return errors.New("invalid_query_frame")
 		}
-	case "exec_cancel":
+	case "exec_cancel", "browser_cancel":
 		if f.Request != nil || f.Record != nil || f.Error != "" {
 			return errors.New("invalid_cancel_frame")
 		}

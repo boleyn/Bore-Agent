@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  BrowserOperationSchema,
   GatewayGrantSchema,
   IdentifierSchema,
   OperationQuerySchema,
@@ -13,6 +14,18 @@ import {
 import { getEmbeddedDeviceGateway } from "./socket";
 
 const safeErrors = new Set([
+  "browser_unavailable",
+  "browser_operation_rejected",
+  "browser_grant_missing",
+  "browser_paused",
+  "browser_busy",
+  "browser_snapshot_required",
+  "browser_site_approval_required",
+  "browser_element_unavailable",
+  "browser_operation_already_dispatched",
+  "browser_screenshot_too_large",
+  "browser_outcome_unknown",
+
   "device_offline",
   "device_owner_mismatch",
   "device_ticket_expired",
@@ -112,7 +125,7 @@ export const createLocalDeviceGateway = (
       const result = await call({
         body: { action: "presence", principal, deviceIds },
         schema: z
-          .array(z.object({ deviceId: IdentifierSchema, online: z.boolean() }).strict())
+          .array(z.strictObject({ deviceId: IdentifierSchema, online: z.boolean(), browserSupported: z.literal(true).optional() }))
           .max(50),
         timeoutMs: 3000,
         signal,
@@ -169,6 +182,28 @@ export const createLocalDeviceGateway = (
         timeoutMs: input.action === "grant_request" ? 130_000 : 10_000,
         signal,
         unknownError: "grant_outcome_unknown",
+      });
+    },
+
+    executeBrowser: async (
+      input: z.infer<typeof TargetSchema> & {
+        browserOperation: z.infer<typeof BrowserOperationSchema>;
+      },
+      signal?: AbortSignal
+    ) => {
+      const { browserOperation: rawOperation, ...target } = input;
+      const { deviceId, ...principal } = TargetSchema.parse(target);
+      const browserOperation = BrowserOperationSchema.parse(rawOperation);
+      const remaining = browserOperation.deadline - Date.now();
+      if (remaining <= 0 || remaining > 600000) {
+        throw new Error('operation_expired_or_invalid_deadline');
+      }
+      return call({
+        body: { action: 'browser_execute', principal, deviceId, browserOperation },
+        schema: z.json(),
+        timeoutMs: remaining,
+        signal,
+        unknownError: 'execution_outcome_unknown'
       });
     },
 

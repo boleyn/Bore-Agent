@@ -21,6 +21,9 @@ return text returned of answer
 else if mode is "notice" then
 display dialog messageText with title (item 4 of argv) buttons {"确定"} default button "确定"
 return "confirmed"
+else if mode is "browserApprove" then
+display dialog messageText with title (item 4 of argv) buttons {"取消", "允许操作"} default button "取消" cancel button "取消" with icon caution
+return "confirmed"
 else if mode is "pairApprove" then
 display dialog messageText with title (item 4 of argv) buttons {"取消", "允许绑定"} default button "取消" cancel button "取消" with icon caution
 return "confirmed"
@@ -32,7 +35,7 @@ end if
 end run`
 
 func dialog(ctx context.Context, mode, message, address string) (string, error) {
-	if mode == "approve" || mode == "accountApprove" || mode == "pairApprove" || mode == "invite" {
+	if mode == "approve" || mode == "accountApprove" || mode == "pairApprove" || mode == "browserApprove" || mode == "invite" {
 		executable, err := os.Executable()
 		if err == nil {
 			helper := filepath.Join(filepath.Dir(executable), "connector-dialog")

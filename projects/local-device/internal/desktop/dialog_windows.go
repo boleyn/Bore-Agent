@@ -48,18 +48,18 @@ var windowsDialogs struct {
 	approval   *exec.Cmd
 	reserved   bool
 }
-var windowsApprovalQueue sync.Mutex
+var windowsApprovalQueue = make(chan struct{}, 1)
 
-// managementOutput handles refresh requests from the child without treating them as dialog results.
+// managementOutput handles management requests from the child without treating them as dialog results.
 type managementOutput struct {
 	ctx    context.Context
-	input  *os.File
+	input  io.WriteCloser
 	buffer bytes.Buffer
 	result bytes.Buffer
 }
 
 // Write accepts fragmented stdout and both Windows and Unix line endings; final
-// dialog results remain separate from the read-only refresh protocol.
+// dialog results remain separate from the management protocol.
 func (w *managementOutput) Write(p []byte) (int, error) {
 	n := len(p)
 	w.buffer.Write(p)
@@ -69,28 +69,47 @@ func (w *managementOutput) Write(p []byte) (int, error) {
 			w.buffer.WriteString(line)
 			break
 		}
-		if strings.TrimSuffix(line, "\r\n") != "__connector_refresh__" && line != "__connector_refresh__\n" {
+		lineValue := strings.TrimRight(line, "\r\n")
+		action := ""
+		if encoded, ok := strings.CutPrefix(lineValue, "__connector_action__"); ok {
+			decoded, err := base64.StdEncoding.DecodeString(encoded)
+			if err != nil || len(decoded) > 1024 {
+				return n, errors.New("invalid_management_action")
+			}
+			action = string(decoded)
+		} else if lineValue != "__connector_refresh__" {
 			w.result.WriteString(line)
 			continue
 		}
-		reply := make(chan managementSnapshot, 1)
-		ctx, cancel := context.WithTimeout(w.ctx, 5*time.Second)
-		var snapshot managementSnapshot
-		ok := false
-		select {
-		case managementSnapshotRequests <- reply:
-			select {
-			case snapshot = <-reply:
-				ok = true
-			case <-ctx.Done():
-			}
-		case <-ctx.Done():
-		}
-		cancel()
-		data, _ := json.Marshal(map[string]any{"ok": ok, "snapshot": snapshot})
-		_, _ = io.WriteString(w.input, base64.StdEncoding.EncodeToString(data)+"\n")
+		// Do not hold stdout draining while waiting for network-backed history;
+		// the child may close before the snapshot is ready.
+		go w.refresh(action)
 	}
 	return n, nil
+}
+
+// refresh bounds one management request to the window lifetime and a short
+// deadline. The UI allows only one outstanding request, preserving reply order.
+func (w *managementOutput) refresh(action string) {
+	reply := make(chan managementSnapshot, 1)
+	ctx, cancel := context.WithTimeout(w.ctx, 5*time.Second)
+	defer cancel()
+	var snapshot managementSnapshot
+	ok := false
+	select {
+	case managementSnapshotRequests <- managementSnapshotRequest{ctx: ctx, reply: reply, action: action}:
+		select {
+		case snapshot = <-reply:
+			ok = true
+		case <-ctx.Done():
+		}
+	case <-ctx.Done():
+	}
+	if w.ctx.Err() != nil {
+		return
+	}
+	data, _ := json.Marshal(map[string]any{"ok": ok, "snapshot": snapshot})
+	_, _ = io.WriteString(w.input, base64.StdEncoding.EncodeToString(data)+"\n")
 }
 
 var windowsUser32 = syscall.NewLazyDLL("user32.dll")
@@ -108,7 +127,8 @@ var windowsActivateCallback = syscall.NewCallback(func(hwnd, pid uintptr) uintpt
 	windowsUser32.NewProc("GetWindowThreadProcessId").Call(hwnd, uintptr(unsafe.Pointer(&owner)))
 	visible, _, _ := windowsUser32.NewProc("IsWindowVisible").Call(hwnd)
 	if owner == uint32(pid) && visible != 0 {
-		windowsUser32.NewProc("ShowWindow").Call(hwnd, 9)
+		// 对方 UI 线程可能已挂起，不能同步等待它处理恢复窗口消息。
+		windowsUser32.NewProc("ShowWindowAsync").Call(hwnd, 9)
 		windowsUser32.NewProc("SetForegroundWindow").Call(hwnd)
 		active, _, _ := windowsUser32.NewProc("GetForegroundWindow").Call()
 		if active != hwnd {
@@ -133,6 +153,14 @@ func dialog(ctx context.Context, mode, message, address string) (string, error) 
 
 // runWindowsDialog 仅从 stdin 传递外部数据，不将地址、名称或连接码插入脚本。
 func runWindowsDialog(ctx context.Context, input map[string]any, management bool) (string, error) {
+	var cancel context.CancelFunc
+	if management {
+		ctx, cancel = context.WithCancel(ctx)
+	} else {
+		// 网页离开后账号邀请原本仍引用应用生命周期，隐藏窗口不得永久占用确认队列。
+		ctx, cancel = context.WithTimeout(ctx, 2*time.Minute)
+	}
+	defer cancel()
 	// 完整 WPF 模板通过 stdin 传输，避免超过 Windows 32767 字符命令行上限。
 	bootstrap := `$source=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([Console]::In.ReadLine())); & ([ScriptBlock]::Create($source))`
 	units := utf16.Encode([]rune(bootstrap))
@@ -160,13 +188,16 @@ func runWindowsDialog(ctx context.Context, input map[string]any, management bool
 	initial := base64.StdEncoding.EncodeToString([]byte(windowScript+"\n"+managementScript+"\n"+nativeScript)) + "\n" + base64.StdEncoding.EncodeToString(payload) + "\n"
 	var output *managementOutput
 	if management {
-		reader, writer, pipeErr := os.Pipe()
+		writer, pipeErr := cmd.StdinPipe()
 		if pipeErr != nil {
 			return "", pipeErr
 		}
-		defer reader.Close()
+		// StdinPipe closes the parent's read handle after Start. Also release it
+		// when a duplicate management request returns before starting the child.
+		if reader, ok := cmd.Stdin.(io.Closer); ok {
+			defer reader.Close()
+		}
 		defer writer.Close()
-		cmd.Stdin = reader
 		output = &managementOutput{ctx: ctx, input: writer}
 		cmd.Stdout = output
 		go func() { _, _ = io.WriteString(writer, initial) }()
@@ -193,8 +224,12 @@ func runWindowsDialog(ctx context.Context, input map[string]any, management bool
 // runWindowsHelper 先关闭并等待管理进程退出，再显示安全申请；管理入口只唤回现有窗口。
 func runWindowsHelper(ctx context.Context, command *exec.Cmd, management bool) ([]byte, error) {
 	if !management {
-		windowsApprovalQueue.Lock()
-		defer windowsApprovalQueue.Unlock()
+		select {
+		case windowsApprovalQueue <- struct{}{}:
+			defer func() { <-windowsApprovalQueue }()
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -202,16 +237,20 @@ func runWindowsHelper(ctx context.Context, command *exec.Cmd, management bool) (
 		windowsDialogs.reserved = true
 		previous, done := windowsDialogs.management, windowsDialogs.done
 		windowsDialogs.Unlock()
-		if previous != nil {
-			_ = previous.Process.Kill()
-			<-done
-		}
 		defer func() {
 			windowsDialogs.Lock()
 			windowsDialogs.reserved = false
 			windowsDialogs.approval = nil
 			windowsDialogs.Unlock()
 		}()
+		if previous != nil {
+			_ = previous.Process.Kill()
+			select {
+			case <-done:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
 	}
 	windowsDialogs.Lock()
 	if management && (windowsDialogs.reserved || windowsDialogs.management != nil) {
@@ -219,10 +258,11 @@ func runWindowsHelper(ctx context.Context, command *exec.Cmd, management bool) (
 		if windowsDialogs.approval != nil {
 			current = windowsDialogs.approval
 		}
-		if current != nil {
-			activateWindowsProcess(uint32(current.Process.Pid))
-		}
 		windowsDialogs.Unlock()
+		if current != nil {
+			// 跨进程窗口调用不能持有全局锁，避免阻塞确认回收和退出。
+			go activateWindowsProcess(uint32(current.Process.Pid))
+		}
 		return nil, errors.New("local_confirmation_cancelled")
 	}
 	if err := ctx.Err(); err != nil {
@@ -239,6 +279,12 @@ func runWindowsHelper(ctx context.Context, command *exec.Cmd, management bool) (
 		return nil, err
 	}
 	defer cleanup()
+	// Wait 同时等待输出复制。helper 退出后若后代仍持有管道，限时关闭管道，
+	// 再清理 Job；取消时直接清理整个 Job，避免只杀父进程留下后代。
+	command.WaitDelay = time.Second
+	if command.Cancel != nil {
+		command.Cancel = func() error { cleanup(); return nil }
+	}
 	if err := command.Start(); err != nil {
 		windowsDialogs.Unlock()
 		return nil, err

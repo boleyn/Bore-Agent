@@ -147,8 +147,10 @@ const ToolTimelineCard = ({
     bash: "运行命令",
     websearch: "搜索网页",
     webfetch: "读取网页",
+    localbrowser: "操作本地浏览器",
   };
-  const actionLabel = onOpenWorkspaceFile ? actionLabels[normalizedToolName] : undefined;
+  const isLocalBrowser = normalizedToolName === "localbrowser";
+  const actionLabel = isLocalBrowser || onOpenWorkspaceFile ? actionLabels[normalizedToolName] : undefined;
 
   const toolParams = parseJsonObject(item.params);
   const filePath = typeof toolParams.file_path === "string" ? toolParams.file_path : "";
@@ -174,6 +176,8 @@ const ToolTimelineCard = ({
   const isDenied = isError && (responseLower.includes("user denied") || responseLower.includes("denied"));
   const status: TimelineStatus = isRunning ? "running" : isDenied ? "denied" : isError ? "error" : "completed";
   const shouldShowStatusPill = status !== "completed";
+  const screenshotPath = isLocalBrowser ? parseJsonObject(responseRaw).path : undefined;
+  const canOpenScreenshot = typeof screenshotPath === "string" && /^\/browser-screenshots\/[a-f0-9-]+\.jpg$/.test(screenshotPath);
   const workspaceFilePath = normalizeWorkspaceFilePath(filePath);
   const truncatedResponse = truncateDetailText(item.response);
   const responseTruncated = isDetailTruncated(item.response);
@@ -589,6 +593,11 @@ const ToolTimelineCard = ({
           pl={3}
           borderLeft="1.5px solid rgba(0, 0, 0, 0.1)"
         >
+          {canOpenScreenshot && onOpenWorkspaceFile && (
+            <Button alignSelf="flex-start" size="xs" variant="link" onClick={() => onOpenWorkspaceFile(screenshotPath)}>
+              查看浏览器截图
+            </Button>
+          )}
           {(isEditTool || isWriteTool) && newString ? (
             <Box borderTop="1px dashed" borderColor="myGray.250" pt={2}>
               <Flex

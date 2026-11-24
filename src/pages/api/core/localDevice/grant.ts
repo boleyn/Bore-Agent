@@ -64,7 +64,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       appId: body.appId,
       deviceId: body.deviceId,
     });
-    res.status(200).json({ grants });
+    res.status(200).json({ grants: grants.filter(grant => grant.capabilities.includes("exec")) });
     return;
   }
 
@@ -90,6 +90,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             version: revoked.version,
             expiresAt: revoked.expiresAt,
             workdir: revoked.workdir,
+            browserMode: revoked.browserMode,
             revoked: true,
           },
         })

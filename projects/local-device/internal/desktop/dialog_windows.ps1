@@ -86,12 +86,19 @@ foreach ($name in @('Heading','Subtitle','DetailLabel','Detail','FolderButton','
 $state = @{ result = $null; folder = ''; approved = $false }
 $pairing = $inputData.mode -eq 'pairApprove'
 $notice = $inputData.mode -eq 'notice'
+$browser = $inputData.mode -eq 'browserApprove'
 if ($pairing) {
     $controls.Heading.Text = '连接这台电脑'
     $controls.Subtitle.Text = '将电脑绑定到当前平台账号，继续在聊天中使用。'
     $controls.DetailLabel.Text = '请求绑定的平台与账号'
     $controls.Detail.Text = $inputData.message
     $controls.Hint.Text = '绑定后可在本机「已授权用户」中启用长期访问。'
+} elseif ($browser) {
+    $controls.Heading.Text = '允许对话操作浏览器？'
+    $controls.Subtitle.Text = '此对话可读取和操作所选浏览器页面。'
+    $controls.DetailLabel.Text = '本次授权'
+    $controls.Detail.Text = $inputData.message
+    $controls.Confirm.Content = '允许操作'
 } elseif ($notice) {
     $controls.Heading.Text = '暂时无法连接这台电脑'
     $controls.Subtitle.Text = '请按下面的提示处理，然后重新连接。'
@@ -145,13 +152,13 @@ $timer.Add_Tick({ $timer.Stop(); $window.Close() })
 $controls.Confirm.Add_Click({
     if ($state.approved) { return }
     # 已显示的有效目录可直接确认；缺失或失效时再选目录，取消选择不批准。
-    if (!$pairing -and !$notice -and ![System.IO.Directory]::Exists($state.folder)) {
+    if (!$pairing -and !$notice -and !$browser -and ![System.IO.Directory]::Exists($state.folder)) {
         $controls.FolderButton.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
         if (![System.IO.Directory]::Exists($state.folder)) { return }
     }
     $state.approved = $true
     if ($notice) { $state.result = 'confirmed'; $window.Close(); return }
-    if ($pairing) { $state.result = 'confirmed' } else { $state.result = $state.folder }
+    if ($pairing -or $browser) { $state.result = 'confirmed' } else { $state.result = $state.folder }
     $controls.Heading.Text = '已确认，正在返回聊天'
     $controls.Confirm.Content = '已确认'
     $controls.Confirm.IsEnabled = $false

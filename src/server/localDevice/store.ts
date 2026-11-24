@@ -44,7 +44,8 @@ export type GrantRecord = {
   expiresAt: number;
   revoked: boolean;
   locallyApproved: boolean;
-  capabilities: Array<"exec">;
+  capabilities: Array<"exec" | "browser">;
+  browserMode?: "dedicated" | "sharedTab";
   workdir: string;
   createdAt: Date;
   purgeAt?: Date;

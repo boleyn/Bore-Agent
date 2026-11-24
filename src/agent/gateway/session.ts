@@ -1,3 +1,6 @@
+import { randomUUID } from "node:crypto";
+import { runLocalBrowser } from "@/server/localDevice/browser";
+import { LocalBrowserToolInputSchema, localBrowserToolParameters, localBrowserToolResult } from "../tools/builtin/localBrowserTool";
 import { listImportedMcpConfigs } from "@server/plugins/store";
 import type { DeviceAccess } from "@/types/projectWorkspace";
 import { createLocalDeviceExecutor } from "../sandbox/environments/localDevice";
@@ -202,6 +205,41 @@ export async function runAgentSession(
       },
     );
     const { deviceAccess, userId } = input;
+    const browserDevice = deviceAccess?.kind === "connector"
+      ? deviceAccess
+      : deviceAccess ? undefined : input.connector;
+    const browserDeviceId = browserDevice?.deviceId;
+    const browserExecutionGrantId = browserDevice?.grantId;
+    if (userId && browserDeviceId && browserExecutionGrantId && !input.isSubagent) {
+      const browserRunId = randomUUID();
+      let browserMode: "dedicated" | "sharedTab" | undefined;
+      plugins.registry.register({
+        name: "LocalBrowser",
+        toolset: "browser",
+        description: "Operate the browser on the local computer selected by the user. Use the dedicated window by default. Use sharedTab only when the user wants to use an existing Chrome or Edge tab, and ask them to share that tab via the AI Studio extension. Start with navigate or snapshot. Use fresh snapshot refs to interact with controls; use extract for page content or tables.",
+        parameters: localBrowserToolParameters,
+        async handler(raw, { signal, sandbox, toolUseId }) {
+          const { operation, mode } = LocalBrowserToolInputSchema.parse(raw);
+          if (mode && browserMode && mode !== browserMode) {
+            throw new Error("The browser mode is fixed for this turn. Start a new message to switch modes.");
+          }
+          browserMode ??= mode ?? "dedicated";
+          const result = await runLocalBrowser({
+            userId,
+            projectToken: input.token,
+            projectName: input.projectName,
+            chatId: input.chatId,
+            deviceId: browserDeviceId,
+            executionGrantId: browserExecutionGrantId,
+            operationKey: `${browserRunId}:${toolUseId}`,
+            mode: browserMode,
+            action: operation,
+            signal,
+          });
+          return localBrowserToolResult(result, operation.action === "screenshot", sandbox);
+        },
+      });
+    }
     if (deviceAccess && userId && !input.isSubagent && plugins.registry.get("Bash")) {
       plugins.registry.register<Parameters<typeof runTerminalCommand>[0]>({
         ...BashTool,

@@ -103,3 +103,17 @@ curl -X POST -H 'Content-Type: application/json' -d '{}' http://localhost:3000/a
 - Windows 测试注意实际 PowerShell 路径、Modules、冷启动时限及 `spawn pnpm ENOENT`；具体回归方式见[开发手册的修改与验收](HANDBOOK.md#修改与验收)。
 
 各端共用的详细行为、失败分类、发布生效范围与验收矩阵集中维护在[开发手册](HANDBOOK.md#跨端行为与实现约定)，不要把本地提交或测试通过写成已部署、已发布或已实机验收。
+
+## 从聊天操作本地浏览器
+
+在 AI Studio 的「我的设备」配对电脑。设备上线并显示「支持本地浏览器」后，在聊天执行环境中选择这台电脑。发送「用本地浏览器打开页面并读取内容」即可使用独立浏览器。浏览器可见，托盘可暂停操作。截图保存在项目的 `browser-screenshots` 目录。
+
+共享现有标签页时，在 Chrome 或 Edge 的扩展管理页面加载安装包中的 `browser-extension` 目录。macOS 目录在应用包的 `Contents/Resources` 中。复制扩展 ID 后，从连接器所在目录执行：
+
+```sh
+./伯仁连接器 --register-browser chrome --browser-extension-id <扩展ID>
+```
+
+Windows 使用 `伯仁连接器.exe`，Edge 使用 `--register-browser edge`。在目标页面点击扩展按钮，发送「操作我共享的标签页」，并在本机确认授权。共享授权只覆盖选中的标签页和站点。
+
+构建内置浏览器包时，在现有打包命令中添加 `--embedded-runtime <Electron 发行目录>`。macOS 参数指向 `Electron.app`，Windows 指向解压的 Electron 目录并使用 NSIS 构建安装器。开发 DMG 可放在 `public/downloads/AIStudio-Connector-macOS.dmg`，供「我的设备」下载。

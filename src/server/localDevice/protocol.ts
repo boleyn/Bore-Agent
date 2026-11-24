@@ -1,3 +1,4 @@
+import { LocalDeviceBrowserActionSchema, LocalDeviceBrowserModeSchema } from "@/shared/localDevice/browser";
 import { z } from "zod";
 import { LocalDeviceCommandSchema, LocalDeviceScopeSchema } from "@/shared/localDevice/type";
 
@@ -19,6 +20,7 @@ export const GatewayGrantSchema = LocalDeviceScopeSchema.extend({
   expiresAt: z.number().int().nonnegative(),
   workdir: z.string().max(4096),
   revoked: z.boolean(),
+  browserMode: LocalDeviceBrowserModeSchema.optional(),
   display: z
     .object({
       teamName: z.string().max(200),
@@ -29,7 +31,7 @@ export const GatewayGrantSchema = LocalDeviceScopeSchema.extend({
     })
     .strict()
     .optional(),
-}).strict();
+}).strict().refine(grant => !grant.browserMode || grant.workdir === "", "Browser grants cannot carry a working directory");
 
 export const OperationSchema = LocalDeviceCommandSchema.extend({
   operationId: IdentifierSchema,
@@ -42,6 +44,11 @@ export const OperationQuerySchema = OperationSchema.pick({
   operationId: true,
   grantId: true,
   grantVersion: true,
+}).strict();
+
+export const BrowserOperationSchema = OperationQuerySchema.extend({
+  deadline: z.number().int().positive(),
+  browserAction: LocalDeviceBrowserActionSchema,
 }).strict();
 
 export const OutputQuerySchema = OperationQuerySchema.extend({

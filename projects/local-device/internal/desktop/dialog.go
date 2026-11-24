@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -58,6 +60,15 @@ func startConfigured(ctx context.Context, input connector.StartOptions, configur
 	})
 	if err != nil {
 		return err
+	}
+	if port := os.Getenv("FASTGPT_DEV_PAIRING_PORT"); port != "" {
+		number, err := strconv.Atoi(port)
+		if err != nil {
+			return errors.New("invalid_development_pairing_port")
+		}
+		if err := bridge.UseDevelopmentPort(number); err != nil {
+			return err
+		}
 	}
 	if configureBridge != nil {
 		configureBridge(bridge)

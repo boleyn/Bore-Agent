@@ -1,8 +1,8 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, writeFile, symlink } from 'node:fs/promises';
+import { cp, mkdir, readFile, stat, writeFile, symlink } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import { dirname, join, resolve, sep } from 'node:path';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const project = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -54,7 +54,12 @@ export function parseOptions(argv, host = { platform: process.platform, arch: pr
         '--config',
         '--platform-url',
         '--dev-loopback',
-        '--signing-identity'
+        '--signing-identity',
+        '--chrome-extension-id',
+        '--edge-extension-id',
+        '--embedded-runtime',
+        '--makensis',
+        '--electron-signer'
       ].includes(key) ||
       !argv[i + 1] ||
       key in values
@@ -74,6 +79,9 @@ export function parseOptions(argv, host = { platform: process.platform, arch: pr
     (host.platform !== platform || (host.arch === 'x64' ? 'amd64' : host.arch) !== arch)
   )
     throw new Error('macOS/Linux GUI builds require a native host and architecture');
+  const embeddedRuntime = values['--embedded-runtime'];
+  if (embeddedRuntime && platform === 'linux')
+    throw new Error('The embedded browser is supported by macOS and Windows builds');
   const signingIdentity = values['--signing-identity'] ?? (platform === 'darwin' ? process.env.CONNECTOR_MAC_SIGNING_IDENTITY : undefined);
   if (
     signingIdentity &&
@@ -83,15 +91,28 @@ export function parseOptions(argv, host = { platform: process.platform, arch: pr
       /[\x00-\x1f\x7f]/u.test(signingIdentity))
   )
     throw new Error('--signing-identity requires a macOS certificate identity');
+  const extensionIds = {
+    chrome: values['--chrome-extension-id'],
+    edge: values['--edge-extension-id']
+  };
+  for (const id of Object.values(extensionIds)) {
+    if (id !== undefined && !/^[a-p]{32}$/.test(id)) {
+      throw new Error('Invalid Chromium extension ID');
+    }
+  }
   return {
     platform,
     arch,
     version,
     platformURL: values['--platform-url'],
     signingIdentity,
+    embeddedRuntime: embeddedRuntime ? resolve(embeddedRuntime) : undefined,
+    extensionIds,
     devLoopback: values['--dev-loopback'] === '1',
     output: resolve(values['--output'] ?? join(project, 'dist')),
     go: values['--go'] ?? 'go',
+    makensis: values['--makensis'] ?? 'makensis',
+    electronSigner: values['--electron-signer'] ? resolve(values['--electron-signer']) : undefined,
     config: resolve(
       values['--config'] ?? process.env.CONFIG_JSON_PATH ?? join(repoRoot, 'config/config.json')
     )
@@ -133,10 +154,10 @@ export async function build(options) {
     throw new Error('Remote Mac packages require --signing-identity or CONNECTOR_MAC_SIGNING_IDENTITY');
   const { name, iconPath: brandingIconPath, bundleId } = await readBranding(options.config);
   let iconPath = brandingIconPath;
-  const run = (program, args, env = process.env) => {
+  const run = (program, args, env = process.env, allowFailure = false) => {
     const result = spawnSync(program, args, { cwd: project, env, stdio: 'inherit', shell: false });
     if (result.error) throw result.error;
-    if (result.status !== 0) throw new Error(`${program} failed (${result.status})`);
+    if (!allowFailure && result.status !== 0) throw new Error(`${program} failed (${result.status})`);
   };
   await mkdir(options.output, { recursive: true });
   const directory = join(options.output, `${options.version}-${options.platform}-${options.arch}`);
@@ -176,6 +197,13 @@ export async function build(options) {
     linker.push(
       `-X=fastgpt.local/local-device/internal/desktop.ProductIconBase64=${(await readFile(trayPath)).toString('base64')}`
     );
+  for (const [browser, variable] of [
+    ['chrome', 'ChromeExtensionID'],
+    ['edge', 'EdgeExtensionID']
+  ]) {
+    const id = options.extensionIds?.[browser];
+    if (id) linker.push(`-X=fastgpt.local/local-device/internal/desktop.${variable}=${id}`);
+  }
   if (options.platform === 'windows') linker.push('-H=windowsgui');
   run(
     options.go,
@@ -196,6 +224,84 @@ export async function build(options) {
       CGO_ENABLED: options.platform === 'windows' ? '0' : '1'
     }
   );
+  const browserHost = join(
+    dirname(binary),
+    options.platform === 'windows' ? 'browser-native-host.exe' : 'browser-native-host'
+  );
+  run(options.go, [
+    'build', '-trimpath', '-buildvcs=false', '-ldflags', '-s -w',
+    '-o', browserHost, './cmd/browser-native-host'
+  ], {
+    ...process.env,
+    GOOS: options.platform,
+    GOARCH: options.arch,
+    CGO_ENABLED: '0'
+  });
+  const extensionDirectory = join(
+    options.platform === 'darwin' ? join(bundle, 'Contents', 'Resources') : directory,
+    'browser-extension'
+  );
+  run(process.execPath, [
+    join(project, 'browser-extension', 'build.mjs'),
+    extensionDirectory
+  ]);
+  const embeddedFiles = [];
+  let windowsInstaller;
+  let embeddedMacBundle;
+  if (options.embeddedRuntime) {
+    const binaryDirectory = dirname(binary);
+    const macOS = options.platform === 'darwin';
+    const runtimeDirectory = macOS
+      ? join(bundle, 'Contents', 'Frameworks')
+      : join(binaryDirectory, 'browser-runtime');
+    if (macOS) embeddedMacBundle = join(runtimeDirectory, 'Electron.app');
+    const embeddedDirectory = macOS
+      ? join(embeddedMacBundle, 'Contents', 'Resources', 'app')
+      : join(binaryDirectory, 'embedded-browser');
+    const runtimeExecutable = macOS
+      ? join('Contents', 'MacOS', 'Electron')
+      : 'electron.exe';
+    if (!(await stat(join(options.embeddedRuntime, runtimeExecutable))).isFile())
+      throw new Error('The Electron runtime executable is missing');
+    await mkdir(runtimeDirectory, { recursive: true });
+    if (macOS) {
+      run('/usr/bin/ditto', [options.embeddedRuntime, embeddedMacBundle]);
+    } else {
+      await cp(options.embeddedRuntime, runtimeDirectory, { recursive: true });
+    }
+    await cp(join(project, 'embedded-browser'), embeddedDirectory, { recursive: true });
+    if (macOS) {
+      const plist = join(embeddedMacBundle, 'Contents', 'Info.plist');
+      for (const [key, value] of [
+        ['CFBundleIdentifier', bundleId + '.browser'],
+        ['CFBundleName', name],
+        ['CFBundleDisplayName', name],
+        ['CFBundleIconFile', 'Connector.icns']
+      ]) {
+        run('/usr/libexec/PlistBuddy', ['-c', `Delete :${key}`, plist], process.env, true);
+        run('/usr/libexec/PlistBuddy', ['-c', `Add :${key} string ${value}`, plist]);
+      }
+      run('/usr/libexec/PlistBuddy', ['-c', 'Delete :LSUIElement', plist], process.env, true);
+      run('/usr/libexec/PlistBuddy', ['-c', 'Add :LSUIElement bool true', plist]);
+    }
+    if (!macOS) {
+      windowsInstaller = join(directory, `${name}-${options.version}-${options.arch}-setup.exe`);
+      const inputPaths = [name, directory, windowsInstaller];
+      if (inputPaths.some((value) => /[\r\n"'$]/u.test(value)))
+        throw new Error('NSIS inputs cannot contain quotes or dollar signs');
+      run(options.makensis ?? 'makensis', [
+        `-DCONNECTOR_NAME=${name}`,
+        `-DCONNECTOR_ID=${bundleId}`,
+        `-DSTAGING_DIR=${directory}`,
+        `-DINSTALLER_FILE=${windowsInstaller}`,
+        join(project, 'packaging', 'windows', 'embedded-browser.nsi')
+      ]);
+    }
+    embeddedFiles.push(
+      join(runtimeDirectory, ...(macOS ? ['Electron.app'] : []), runtimeExecutable),
+      ...['main.cjs', 'preload.cjs', 'toolbar.html', 'package.json'].map((file) => join(embeddedDirectory, file))
+    );
+  }
   if (options.platform === 'darwin') {
     const template = await readFile(join(project, 'packaging', 'macos', 'Info.plist'), 'utf8');
     const xmlName = name.replaceAll('&', '&amp;');
@@ -232,9 +338,31 @@ export async function build(options) {
       options.signingIdentity ?? '-',
       ...(options.signingIdentity ? ['--options', 'runtime', '--timestamp'] : [])
     ];
+    if (embeddedMacBundle) {
+      await cp(
+        join(resources, 'Connector.icns'),
+        join(embeddedMacBundle, 'Contents', 'Resources', 'Connector.icns')
+      );
+      if (options.signingIdentity) {
+        const { sign } = await import(
+          pathToFileURL(options.electronSigner ?? require.resolve('@electron/osx-sign')).href
+        );
+        await sign({
+          app: embeddedMacBundle,
+          identity: options.signingIdentity,
+          platform: 'darwin',
+          type: 'distribution',
+          preAutoEntitlements: false
+        });
+      } else {
+        // 本地 ad-hoc 安装包也要签署 Electron 的嵌套 helper 与 framework。
+        run('/usr/bin/codesign', [...signingArguments, '--deep', '--preserve-metadata=identifier,entitlements', embeddedMacBundle]);
+      }
+    }
     run('/usr/bin/codesign', [...signingArguments, join(dirname(binary), 'connector-dialog')]);
+    run('/usr/bin/codesign', [...signingArguments, browserHost]);
     run('/usr/bin/codesign', [...signingArguments, bundle]);
-    run('/usr/bin/codesign', ['--verify', '--strict', bundle]);
+    run('/usr/bin/codesign', ['--verify', '--deep', '--strict', bundle]);
     await symlink('/Applications', join(staging, 'Applications'));
     run('/usr/bin/hdiutil', [
       'create',
@@ -243,7 +371,7 @@ export async function build(options) {
       '-srcfolder',
       staging,
       '-format',
-      'UDZO',
+      options.embeddedRuntime ? 'UDBZ' : 'UDZO',
       installer
     ]);
     if (options.signingIdentity) {
@@ -257,8 +385,15 @@ export async function build(options) {
       run('/usr/bin/codesign', ['--verify', '--strict', installer]);
     }
   }
-  const artifacts = [binary];
+  const artifacts = [
+    binary,
+    browserHost,
+    join(extensionDirectory, 'manifest.json'),
+    join(extensionDirectory, 'background.js'),
+    ...embeddedFiles
+  ];
   if (options.platform === 'darwin') artifacts.push(installer);
+  if (windowsInstaller) artifacts.push(windowsInstaller);
   const hashes = await Promise.all(
     artifacts.map(async (path) => ({
       file: path.slice(directory.length + 1),
@@ -278,6 +413,8 @@ export async function build(options) {
         productionReady: false,
         developmentLoopback: options.devLoopback === true,
         platformURL,
+        embeddedBrowser: embeddedFiles.length > 0,
+        installer: basename(options.platform === 'darwin' ? installer : windowsInstaller ?? binary),
         signing:
           options.platform === 'darwin'
             ? options.signingIdentity

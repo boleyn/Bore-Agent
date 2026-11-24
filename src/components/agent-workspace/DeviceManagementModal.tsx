@@ -28,6 +28,7 @@ type PairedDeviceItem = {
   name: string;
   platform: string;
   online: boolean;
+  browserSupported?: boolean;
 };
 
 type DeviceManagementModalProps = {
@@ -252,7 +253,7 @@ export default function DeviceManagementModal({ isOpen, onClose }: DeviceManagem
                 <Laptop size={20} />
                 <Box flex={1} minW={0}>
                   <Text fontSize="sm" noOfLines={1}>{name}</Text>
-                  <Text fontSize="xs" color="ink.secondary">{device.online ? "在线" : "离线"}</Text>
+                  <Text fontSize="xs" color="ink.secondary">{device.online ? "在线" : "离线"}{device.browserSupported && " · 支持本地浏览器"}</Text>
                 </Box>
                 <IconButton aria-label={`修改${name}的备注`} size="sm" variant="ghost" icon={<Pencil size={15} />}
                   onClick={() => { setEditing(device.deviceId); setRemark(device.remark || ""); }} />

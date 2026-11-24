@@ -30,6 +30,7 @@ type Grant struct {
 	ChatID       string        `json:"chatId"`
 	SourceTarget string        `json:"sourceTarget"`
 	ExpiresAt    int64         `json:"expiresAt"`
+	BrowserMode  string        `json:"browserMode,omitempty"`
 	Workdir      string        `json:"workdir"`
 	Revoked      bool          `json:"revoked"`
 	Display      *DisplayNames `json:"display,omitempty"`
@@ -56,6 +57,9 @@ type Manager struct {
 }
 
 var identifier = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
+
+// Owner identifies the paired account whose grants this manager can accept.
+func (m *Manager) Owner() Owner { return m.owner }
 
 // New restores approvals but never restores leases. An online authority must renew them.
 func New(ctx context.Context, ledger *journal.Journal, owner Owner, clocks ...*remoteclock.Clock) (*Manager, error) {
@@ -113,12 +117,24 @@ func (m *Manager) Approve(ctx context.Context, g Grant) error {
 // approve atomically checks the local confirmation generation with publication.
 // A dialog opened before a revoke-all action cannot restore permission afterwards.
 func (m *Manager) approve(ctx context.Context, g Grant, generation *uint64) error {
-	if g.Owner != m.owner || !identifier.MatchString(g.ID) || g.Version < 1 || g.AppID == "" || g.ChatID == "" || g.SourceTarget == "" || g.Revoked || m.Expired(g) || !filepath.IsAbs(g.Workdir) {
+	if g.Owner != m.owner || !identifier.MatchString(g.ID) || g.Version < 1 || g.AppID == "" || g.ChatID == "" || g.SourceTarget == "" || g.Revoked || m.Expired(g) {
 		return errors.New("invalid_local_grant")
 	}
-	info, err := os.Stat(g.Workdir)
-	if err != nil || !info.IsDir() {
-		return errors.New("invalid_grant_workdir")
+	switch g.BrowserMode {
+	case "":
+		if !filepath.IsAbs(g.Workdir) {
+			return errors.New("invalid_local_grant")
+		}
+		info, err := os.Stat(g.Workdir)
+		if err != nil || !info.IsDir() {
+			return errors.New("invalid_grant_workdir")
+		}
+	case "dedicated", "sharedTab":
+		if g.Workdir != "" || generation == nil {
+			return errors.New("invalid_browser_grant")
+		}
+	default:
+		return errors.New("invalid_browser_grant")
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -141,7 +157,7 @@ func (m *Manager) approve(ctx context.Context, g Grant, generation *uint64) erro
 		if old.SamePermission(g) {
 			return nil
 		}
-		if g.Version <= old.Version || g.Owner != old.Owner || g.AppID != old.AppID || g.ChatID != old.ChatID || g.SourceTarget != old.SourceTarget {
+		if g.Version <= old.Version || g.Owner != old.Owner || g.AppID != old.AppID || g.ChatID != old.ChatID || g.SourceTarget != old.SourceTarget || g.BrowserMode != old.BrowserMode {
 			return errors.New("grant_version_conflict")
 		}
 	} else if len(m.grants) >= 100 {
@@ -256,10 +272,10 @@ func (m *Manager) RevokeAll(ctx context.Context) error {
 }
 
 func (m *Manager) notify() { close(m.changed); m.changed = make(chan struct{}) }
-func (m *Manager) check(r operation.Request) (Grant, time.Time, error) {
+func (m *Manager) check(r operation.Request, browser bool) (Grant, time.Time, error) {
 	g, ok := m.grants[r.GrantID]
 	lease := m.leases[r.GrantID]
-	if m.access.Paused || m.access.Removed || !ok || m.access.BlocksSession(g) || g.Revoked || g.Version != r.GrantVersion || m.Expired(g) || !lease.After(time.Now()) {
+	if m.access.Paused || m.access.Removed || !ok || (g.BrowserMode != "") != browser || m.access.BlocksSession(g) || g.Revoked || g.Version != r.GrantVersion || m.Expired(g) || !lease.After(time.Now()) {
 		return Grant{}, time.Time{}, errors.New("grant_revoked")
 	}
 	return g, lease, nil
@@ -269,15 +285,26 @@ func (m *Manager) check(r operation.Request) (Grant, time.Time, error) {
 func (m *Manager) Authorize(r operation.Request) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	_, _, err := m.check(r)
+	_, _, err := m.check(r, false)
 	return err
 }
 
 // Prepare fixes the default directory and cancels a live task on local revocation or
 // lease expiry. Renewal wakes the monitor; a stale timer cannot cancel a renewed lease.
 func (m *Manager) Prepare(parent context.Context, r operation.Request) (context.Context, operation.Request, context.CancelFunc, error) {
+	return m.prepare(parent, r, false)
+}
+
+// PrepareBrowser checks browser authorization before every action and monitors
+// the same renewable lease as local execution without granting shell access.
+func (m *Manager) PrepareBrowser(parent context.Context, grantID string, version int64) (context.Context, context.CancelFunc, error) {
+	ctx, _, cancel, err := m.prepare(parent, operation.Request{GrantID: grantID, GrantVersion: version}, true)
+	return ctx, cancel, err
+}
+
+func (m *Manager) prepare(parent context.Context, r operation.Request, browser bool) (context.Context, operation.Request, context.CancelFunc, error) {
 	m.mu.Lock()
-	g, _, err := m.check(r)
+	g, _, err := m.check(r, browser)
 	m.mu.Unlock()
 	if err != nil {
 		return nil, r, nil, err
@@ -290,7 +317,7 @@ func (m *Manager) Prepare(parent context.Context, r operation.Request) (context.
 		defer cancel(nil)
 		for {
 			m.mu.Lock()
-			_, lease, err := m.check(r)
+			_, lease, err := m.check(r, browser)
 			// API 对外仍统一拒绝；本地诊断区分撤销、授权到期与短租约到期。
 			if err != nil && !m.access.Paused && !m.access.Removed {
 				g, ok := m.grants[r.GrantID]

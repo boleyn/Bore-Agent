@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 
+	"fastgpt.local/local-device/internal/browser"
 	"fastgpt.local/local-device/internal/devicekey"
 	"fastgpt.local/local-device/internal/executor"
 	"fastgpt.local/local-device/internal/grant"
@@ -24,6 +25,8 @@ type BindingInvite struct {
 }
 
 type StartOptions struct {
+	Browser            *browser.Registry
+	ConfirmBrowser     func(context.Context, context.Context, grant.Grant) error
 	RePair             bool
 	Secondary          bool
 	AccountMode        bool

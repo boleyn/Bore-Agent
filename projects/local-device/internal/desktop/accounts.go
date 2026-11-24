@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"fastgpt.local/local-device/internal/connector"
 	"fastgpt.local/local-device/internal/grant"
@@ -141,6 +142,34 @@ func changeAccountAccess(ctx context.Context, local *connector.LocalSession, act
 		local.Disconnect()
 	}
 	return nil
+}
+
+// applyManagementAction only accepts operations on existing grants. Enabling new
+// execution access still requires the separate native approval path, never IPC.
+func applyManagementAction(ctx context.Context, locals []*connector.LocalSession, action string) error {
+	verb, id, ok := strings.Cut(action, ":")
+	if !ok {
+		return errors.New("invalid_management_action")
+	}
+	grantID := ""
+	if verb == "revoke-session" {
+		grantID, id, ok = strings.Cut(id, ":")
+		if !ok || grantID == "" {
+			return errors.New("invalid_management_action")
+		}
+	} else if verb != "pause" && verb != "resume" && verb != "remove" {
+		return errors.New("invalid_management_action")
+	}
+	for _, local := range locals {
+		if accountID(local) != id {
+			continue
+		}
+		if verb == "revoke-session" {
+			return local.Grants.RevokeSession(ctx, grantID)
+		}
+		return changeAccountAccess(ctx, local, verb)
+	}
+	return errors.New("management_account_not_found")
 }
 
 // Separate journals prevent grant and operation IDs from different platforms colliding.

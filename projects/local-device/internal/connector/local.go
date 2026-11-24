@@ -28,12 +28,15 @@ type LocalSession struct {
 }
 
 type LocalOptions struct {
-	AccountMode bool
-	Lifetime    *ExecutionLifetime
-	DeviceID    string
-	Journal     *journal.Journal
-	Shell       executor.Shell
-	Confirm     func(context.Context, grant.Grant) (string, error)
+	HasBrowser     func(grant.Owner, string, int64) bool
+	RevokeBrowser  func(grant.Owner, string, int64)
+	ConfirmBrowser func(context.Context, grant.Grant) error
+	AccountMode    bool
+	Lifetime       *ExecutionLifetime
+	DeviceID       string
+	Journal        *journal.Journal
+	Shell          executor.Shell
+	Confirm        func(context.Context, grant.Grant) (string, error)
 }
 
 // NewLocalSessionFactory waits for the authenticated welcome before constructing the
@@ -76,10 +79,36 @@ func NewLocalSessionFactory(input LocalOptions) (func(context.Context, grant.Own
 				return input.Confirm(ctx, value)
 			}
 		}
-		control := manager.ControlHandler(confirm)
+		control := manager.ControlHandler(confirm, grant.BrowserApproval{
+			Confirm: input.ConfirmBrowser,
+			Discard: input.RevokeBrowser,
+		})
 		// 授权失败发生在执行之前，记录安全分类，便于与命令执行错误区分。
 		controlWithDiagnostics := func(ctx context.Context, stage string, value grant.Grant, leaseExpiresAt int64) (grant.Grant, error) {
+			needsTarget := stage == "grant_renew" && value.BrowserMode != "" && value.Owner == owner &&
+				(input.HasBrowser == nil || !input.HasBrowser(owner, value.ID, value.Version))
+			if needsTarget && (value.BrowserMode != "dedicated" || input.ConfirmBrowser == nil) {
+				return grant.Grant{}, errors.New("browser_unavailable")
+			}
 			result, err := control(ctx, stage, value, leaseExpiresAt)
+			if err == nil && needsTarget {
+				// 连接器重启或专用窗口关闭后，可重建已批准的独立窗口。共享标签页必须重新选定。
+				err = input.ConfirmBrowser(ctx, value)
+				if err != nil && input.HasBrowser != nil && input.HasBrowser(owner, value.ID, value.Version) {
+					err = nil
+				}
+				if err == nil {
+					// 启动期间可能被撤销或暂停，重验后才返回可用目标。
+					_, err = control(ctx, stage, value, leaseExpiresAt)
+					if err != nil && input.RevokeBrowser != nil {
+						input.RevokeBrowser(owner, value.ID, value.Version)
+					}
+				}
+			}
+			if value.BrowserMode != "" && value.Owner == owner && input.RevokeBrowser != nil &&
+				(stage == "grant_revoke" && (err == nil || result.Revoked)) {
+				input.RevokeBrowser(owner, value.ID, value.Version)
+			}
 			if err != nil {
 				now := time.Now().UnixMilli()
 				remaining := int64(0)

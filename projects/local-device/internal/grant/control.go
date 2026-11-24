@@ -7,11 +7,21 @@ import (
 	"time"
 )
 
-// A persistent account approval covers directory changes. Legacy session-only
-// bindings still require local confirmation for new grants.
-func (m *Manager) ControlHandler(confirm func(context.Context, Grant) (string, error)) func(context.Context, string, Grant, int64) (Grant, error) {
+// BrowserApproval binds a confirmed local target and releases it if the
+// permission cannot be committed after the user confirms.
+type BrowserApproval struct {
+	Confirm func(context.Context, Grant) error
+	Discard func(Owner, string, int64)
+}
+
+// ControlHandler requires an explicit local confirmation callback for new approval.
+// The callback returns a locally chosen directory; a cloud-provided directory is ignored.
+func (m *Manager) ControlHandler(confirm func(context.Context, Grant) (string, error), browserApproval ...BrowserApproval) func(context.Context, string, Grant, int64) (Grant, error) {
 	prompts := make(chan struct{}, 1)
 	return func(ctx context.Context, kind string, value Grant, leaseExpiresAt int64) (Grant, error) {
+		if value.BrowserMode != "" && (len(browserApproval) == 0 || browserApproval[0].Confirm == nil) {
+			return Grant{}, errors.New("browser_grant_unavailable")
+		}
 		if value.Owner != m.owner {
 			return Grant{}, errors.New("grant_owner_mismatch")
 		}
@@ -38,6 +48,29 @@ func (m *Manager) ControlHandler(confirm func(context.Context, Grant) (string, e
 			}
 			if access.Paused || access.Removed {
 				return Grant{}, errors.New("account_access_paused")
+			}
+			if value.BrowserMode != "" {
+				select {
+				case prompts <- struct{}{}:
+					defer func() { <-prompts }()
+				default:
+					return Grant{}, errors.New("local_confirmation_busy")
+				}
+				approval := browserApproval[0]
+				if err := approval.Confirm(ctx, value); err != nil {
+					return Grant{}, err
+				}
+				err := ctx.Err()
+				if err == nil {
+					err = m.approve(ctx, value, &generation)
+				}
+				if err != nil {
+					if approval.Discard != nil {
+						approval.Discard(value.Owner, value.ID, value.Version)
+					}
+					return Grant{}, err
+				}
+				return value, nil
 			}
 			expected := value
 			expected.Workdir = existing.Workdir
@@ -88,11 +121,9 @@ func (m *Manager) ControlHandler(confirm func(context.Context, Grant) (string, e
 			if !ok || !existing.SamePermission(value) {
 				return Grant{}, errors.New("grant_scope_mismatch")
 			}
-			if err := m.Revoke(ctx, value.ID); err != nil {
-				return Grant{}, err
-			}
+			err := m.Revoke(ctx, value.ID)
 			value.Revoked = true
-			return value, nil
+			return value, err
 		default:
 			return Grant{}, errors.New("unsupported_grant_control")
 		}

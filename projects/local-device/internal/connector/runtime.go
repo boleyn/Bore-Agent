@@ -5,12 +5,14 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fastgpt.local/local-device/internal/transport"
 	"net/http"
 	"net/url"
 	"time"
 
+	"fastgpt.local/local-device/internal/browser"
 	"fastgpt.local/local-device/internal/grant"
 	"fastgpt.local/local-device/internal/journal"
 	"fastgpt.local/local-device/internal/operation"
@@ -112,6 +114,7 @@ func (p *PlatformClient) EnsureBinding(ctx context.Context, input PairingOptions
 }
 
 type RunOptions struct {
+	Browser     *browser.Registry
 	Profile     func(*MemberProfile)
 	OpenSession func(context.Context, grant.Owner) (*LocalSession, error)
 	HandleGrant func(context.Context, string, grant.Grant, int64) (grant.Grant, error)
@@ -151,7 +154,11 @@ func (p *PlatformClient) Run(ctx context.Context, input RunOptions) error {
 				input.Status("connecting")
 			}
 			started := time.Now()
-			_ = Connect(ctx, Options{URL: input.GatewayURL, Ticket: ticket.Ticket, RefreshTicket: func(ctx context.Context) (ConnectionTicket, error) {
+			var browserHandler func(context.Context, grant.Owner, browser.Request) (json.RawMessage, error)
+			if input.Browser != nil {
+				browserHandler = input.Browser.Run
+			}
+			_ = Connect(ctx, Options{HandleBrowser: browserHandler, URL: input.GatewayURL, Ticket: ticket.Ticket, RefreshTicket: func(ctx context.Context) (ConnectionTicket, error) {
 				return p.Authenticate(ctx, input.DeviceID, input.Key)
 			}, OpenSession: input.OpenSession, Service: input.Service, Prepare: input.Prepare, HandleGrant: input.HandleGrant, HTTPClient: input.HTTPClient, OnConnected: func() {
 				if input.Status != nil {

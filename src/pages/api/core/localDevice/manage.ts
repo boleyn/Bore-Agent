@@ -42,9 +42,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const server = (res.socket as (typeof res.socket & { server?: Server }) | null)?.server;
   if (server) getEmbeddedDeviceGateway().attach(server);
 
-  if (req.method === "GET") {
+  const sendDevices = async () => {
     const devices = await listUserDevices(userId);
-    let onlineMap = new Map<string, boolean>();
+    let presenceByDevice = new Map<string, { online: boolean; browserSupported?: true }>();
     if (devices.length > 0) {
       const gateway = createLocalDeviceGateway();
       const presence = await gateway
@@ -54,7 +54,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           deviceIds: devices.map((d) => d.deviceId),
         })
         .catch(() => []);
-      onlineMap = new Map(presence.map((p) => [p.deviceId, p.online]));
+      presenceByDevice = new Map(presence.map(item => [item.deviceId, item]));
     }
     res.status(200).json({
       devices: devices.map((d) => ({
@@ -63,12 +63,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         remark: d.remark,
         platform: d.platform,
         fingerprint: d.fingerprint,
-        online: onlineMap.get(d.deviceId) ?? false,
+        online: presenceByDevice.get(d.deviceId)?.online ?? false,
+        browserSupported: presenceByDevice.get(d.deviceId)?.browserSupported ?? false,
         createdAt: d.createdAt,
       })),
     });
-    return;
-  }
+  };
+
+  if (req.method === "GET") return sendDevices();
 
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed" });
@@ -82,33 +84,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
   const body = parsed.data;
 
-  if (body.action === "list") {
-    const devices = await listUserDevices(userId);
-    let onlineMap = new Map<string, boolean>();
-    if (devices.length > 0) {
-      const gateway = createLocalDeviceGateway();
-      const presence = await gateway
-        .presence({
-          teamId: userId,
-          memberId: userId,
-          deviceIds: devices.map((d) => d.deviceId),
-        })
-        .catch(() => []);
-      onlineMap = new Map(presence.map((p) => [p.deviceId, p.online]));
-    }
-    res.status(200).json({
-      devices: devices.map((d) => ({
-        deviceId: d.deviceId,
-        name: d.name,
-        remark: d.remark,
-        platform: d.platform,
-        fingerprint: d.fingerprint,
-        online: onlineMap.get(d.deviceId) ?? false,
-        createdAt: d.createdAt,
-      })),
-    });
-    return;
-  }
+  if (body.action === "list") return sendDevices();
 
   if (body.action === "remark") {
     const saved = await setDeviceRemark(body.deviceId, userId, body.remark);

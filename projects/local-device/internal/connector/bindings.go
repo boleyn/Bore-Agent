@@ -89,14 +89,31 @@ func (p *PlatformClient) runBindings(parent context.Context, input StartOptions,
 					return err
 				}
 				defer lifetime.Close()
-				factory, err := NewLocalSessionFactory(LocalOptions{AccountMode: input.AccountMode, DeviceID: id, Journal: pairing.Journal, Shell: shell, Confirm: input.Confirm, Lifetime: lifetime})
+				var hasBrowser func(grant.Owner, string, int64) bool
+				var revokeBrowser func(grant.Owner, string, int64)
+				var confirmBrowser func(context.Context, grant.Grant) error
+				if input.Browser != nil && input.ConfirmBrowser != nil {
+					revokeBrowser = input.Browser.Revoke
+					hasBrowser = input.Browser.Has
+					confirmBrowser = func(promptCtx context.Context, value grant.Grant) error {
+						return input.ConfirmBrowser(promptCtx, workerCtx, value)
+					}
+				}
+				factory, err := NewLocalSessionFactory(LocalOptions{
+					AccountMode: input.AccountMode, DeviceID: id, Journal: pairing.Journal,
+					Shell: shell, Confirm: input.Confirm, Lifetime: lifetime, ConfirmBrowser: confirmBrowser, RevokeBrowser: revokeBrowser, HasBrowser: hasBrowser,
+				})
 				if err != nil {
 					return err
+				}
+				browserRegistry := input.Browser
+				if confirmBrowser == nil {
+					browserRegistry = nil
 				}
 				var announced *LocalSession
 				var profile *MemberProfile
 				return p.Run(workerCtx, RunOptions{
-					DeviceID: id, Key: pairing.Key, GatewayURL: input.GatewayURL, HTTPClient: input.HTTPClient,
+					Browser: browserRegistry, DeviceID: id, Key: pairing.Key, GatewayURL: input.GatewayURL, HTTPClient: input.HTTPClient,
 					Profile: func(value *MemberProfile) { profile = value },
 					Status:  func(status string) { send(event{id: id, status: status}) },
 					OpenSession: func(sessionCtx context.Context, owner grant.Owner) (*LocalSession, error) {

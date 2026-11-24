@@ -6,15 +6,24 @@ package desktop
 #cgo CFLAGS: -x objective-c
 #cgo LDFLAGS: -framework Cocoa
 #include <stdlib.h>
-void connectorInstallStatusHook(void);
+void connectorInstallStatusHook(int showDock);
 void connectorSetWindowPID(int pid);
 void connectorSetStatus(int status);
 */
 import "C"
 
 // installStatusHook binds tray activation to the existing native window, not a new helper process.
-func installStatusHook()         { C.connectorInstallStatusHook() }
-func setNativeWindowPID(pid int) { C.connectorSetWindowPID(C.int(pid)) }
+func installStatusHook(showDock bool) {
+	if showDock {
+		C.connectorInstallStatusHook(1)
+		return
+	}
+	C.connectorInstallStatusHook(0)
+}
+
+//export connectorRequestManagement
+func connectorRequestManagement() { RequestManagement() }
+func setNativeWindowPID(pid int)  { C.connectorSetWindowPID(C.int(pid)) }
 func setNativeStatus(status string) {
 	value := 0
 	switch status {

@@ -2,6 +2,6 @@
 
 package desktop
 
-func installStatusHook()            {}
+func installStatusHook(bool)        {}
 func setNativeWindowPID(pid int)    {}
 func setNativeStatus(status string) {}

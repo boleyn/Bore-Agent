@@ -246,3 +246,36 @@ func TestLocalInviteHandoffKeepsPlatformIdentitySeparate(t *testing.T) {
 		t.Fatalf("primary invite not handed to native confirmation: %d", response.Code)
 	}
 }
+
+func TestDevelopmentBridgeUsesOnlyConfiguredLoopbackPort(t *testing.T) {
+	const origin = "http://localhost:3001"
+	bridge, err := New(origin, func(context.Context, string) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := bridge.UseDevelopmentPort(13006); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		host   string
+		status int
+	}{
+		{"127.0.0.1:13006", http.StatusOK},
+		{Address, http.StatusForbidden},
+	} {
+		req := httptest.NewRequest(http.MethodGet, "http://"+tc.host+"/status", nil)
+		req.Header.Set("Origin", origin)
+		res := httptest.NewRecorder()
+		bridge.ServeHTTP(res, req)
+		if res.Code != tc.status {
+			t.Fatalf("%s responded %d, want %d", tc.host, res.Code, tc.status)
+		}
+	}
+	remote, err := New("https://example.com", func(context.Context, string) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := remote.UseDevelopmentPort(13006); err == nil {
+		t.Fatal("remote origin enabled the development port")
+	}
+}

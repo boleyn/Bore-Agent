@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -28,6 +29,7 @@ var noncePattern = regexp.MustCompile(`^[a-fA-F0-9-]{36}$`)
 type Server struct {
 	// ClientVersion is set before Listen; status exposes build metadata, never authorization.
 	ClientVersion       string
+	address             string
 	LocalInvite         func(string, string) bool
 	LocalInviteDecision func(string, string, chan<- bool) bool
 	LocalDevices        func(string) []string
@@ -48,7 +50,18 @@ func New(origin string, confirm func(context.Context, string) error) (*Server, e
 	if err != nil || u.Host == "" || !transport.SecureURL(u, "https", "http") || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Path != "" || confirm == nil {
 		return nil, errors.New("invalid_pairing_bridge_configuration")
 	}
-	return &Server{origin: origin, confirm: confirm, used: make(map[string]bool)}, nil
+	return &Server{origin: origin, address: Address, confirm: confirm, used: make(map[string]bool)}, nil
+}
+
+// UseDevelopmentPort keeps the pairing bridge on loopback while allowing an
+// isolated desktop connector to coexist with a production installation.
+func (s *Server) UseDevelopmentPort(port int) error {
+	origin, err := url.Parse(s.origin)
+	if err != nil || !isLoopbackOrigin(origin.Scheme+"://"+origin.Host) || port < 1024 || port > 65535 {
+		return errors.New("invalid_development_pairing_port")
+	}
+	s.address = net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+	return nil
 }
 
 // Bound records only this connector's paired identity, never a webpage-supplied device ID.
@@ -83,7 +96,7 @@ func (s *Server) Show(ctx context.Context, notice connector.PairingNotice) error
 
 // Listen never binds to a LAN interface. CORS, Host and native approval are enforced by ServeHTTP.
 func (s *Server) Listen() (func() error, error) {
-	listener, err := net.Listen("tcp", Address)
+	listener, err := net.Listen("tcp", s.address)
 	if err != nil {
 		return nil, err
 	}
@@ -102,11 +115,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	origin := r.Header.Get("Origin")
 	// 桌面多账号模式对主平台也使用邀请确认，旧网页仍可走原来的 /pair。
 	primaryInvite := origin == s.origin && (r.URL.Path == "/status" || r.URL.Path == "/invite")
-	if r.Host == Address && s.LocalInvite != nil && (primaryInvite || isLoopbackOrigin(origin) && (r.URL.Path == "/status" || r.URL.Path == "/invite") || r.URL.Path == "/invite" && isWebOrigin(origin)) {
+	if r.Host == s.address && s.LocalInvite != nil && (primaryInvite || isLoopbackOrigin(origin) && (r.URL.Path == "/status" || r.URL.Path == "/invite") || r.URL.Path == "/invite" && isWebOrigin(origin)) {
 		s.serveLocalInvite(w, r, origin)
 		return
 	}
-	if r.Host != Address || origin != s.origin {
+	if r.Host != s.address || origin != s.origin {
 		http.Error(w, "origin_not_allowed", http.StatusForbidden)
 		return
 	}

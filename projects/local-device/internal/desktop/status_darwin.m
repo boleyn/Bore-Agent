@@ -2,12 +2,15 @@
 
 #import <Cocoa/Cocoa.h>
 #include <stdatomic.h>
+#import <objc/runtime.h>
+
+extern void connectorRequestManagement(void);
 
 static atomic_int windowPID = 0;
 void connectorSetWindowPID(int pid) { atomic_store(&windowPID, pid); }
 
-// Handle the button before menu tracking starts; never cancel a tracking menu
-// from its notification callback, which can leave AppKit holding keyboard focus.
+// Ordinary clicks must always expose the menu, including when the settings
+// helper is open. Option-click can raise that helper without menu tracking.
 @interface ConnectorStatusAction : NSObject
 @property(nonatomic, strong) NSStatusItem *item;
 @property(nonatomic, strong) NSMenu *menu;
@@ -17,7 +20,7 @@ void connectorSetWindowPID(int pid) { atomic_store(&windowPID, pid); }
 - (void)clicked:(id)sender {
  int pid = atomic_load(&windowPID);
  NSRunningApplication *app = pid > 0 ? [NSRunningApplication runningApplicationWithProcessIdentifier:pid] : nil;
- if (app != nil && NSApp.currentEvent.type != NSEventTypeRightMouseUp) {
+ if (app != nil && (NSApp.currentEvent.modifierFlags & NSEventModifierFlagOption) != 0) {
   [app activateWithOptions:NSApplicationActivateAllWindows];
   [[NSDistributedNotificationCenter defaultCenter] postNotificationName:@"tech.asiainfo.connector.raise-window" object:[NSString stringWithFormat:@"%d", pid]];
   return;
@@ -26,14 +29,26 @@ void connectorSetWindowPID(int pid) { atomic_store(&windowPID, pid); }
 }
 @end
 static ConnectorStatusAction *statusAction;
-void connectorInstallStatusHook(void) {
+
+static BOOL connectorShouldHandleReopen(id delegate, SEL selector, NSApplication *app, BOOL hasVisibleWindows) {
+ connectorRequestManagement();
+ return NO;
+}
+
+void connectorInstallStatusHook(int showDock) {
  dispatch_async(dispatch_get_main_queue(), ^{
+  if (showDock && NSApp.delegate != nil) {
+   SEL reopen = @selector(applicationShouldHandleReopen:hasVisibleWindows:);
+   class_addMethod([NSApp.delegate class], reopen, (IMP)connectorShouldHandleReopen, "B@:@B");
+   [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
+  }
   @try {
    NSStatusItem *item = [(NSObject *)NSApp.delegate valueForKey:@"statusItem"];
    statusAction = [ConnectorStatusAction new];
    statusAction.item = item;
    statusAction.menu = item.menu;
    item.menu = nil;
+   item.button.accessibilityLabel = @"伯仁连接器菜单";
    item.button.target = statusAction;
    item.button.action = @selector(clicked:);
    [item.button sendActionOn:NSEventMaskLeftMouseUp | NSEventMaskRightMouseUp];

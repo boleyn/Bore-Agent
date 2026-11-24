@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "AI Studio 共享标签页",
+  "version": "0.1.0",
+  "description": "Share one browser tab with your AI Studio Connector.",
+  "permissions": ["activeTab", "debugger", "nativeMessaging"],
+  "action": {
+    "default_title": "Start or stop sharing this tab"
+  },
+  "background": {
+    "service_worker": "background.js"
+  }
+}

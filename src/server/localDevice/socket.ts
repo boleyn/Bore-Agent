@@ -6,6 +6,7 @@ import { z } from "zod";
 import { LOCAL_DEVICE_GATEWAY_AUDIENCE } from "@/shared/localDevice/constants";
 import { createDeviceTicketService } from "./ticket";
 import {
+  BrowserOperationSchema,
   GatewayGrantSchema,
   IdentifierSchema,
   OperationQuerySchema,
@@ -32,6 +33,8 @@ const header = {
 };
 
 const ResponseFrameSchema = z.discriminatedUnion("type", [
+  z.strictObject({ ...header, type: z.literal("browser_result"), operationId: IdentifierSchema, browserResult: z.json() }),
+  z.strictObject({ ...header, type: z.literal("browser_error"), operationId: IdentifierSchema, error: IdentifierSchema }),
   z
     .object({
       ...header,
@@ -92,6 +95,7 @@ type Pending = {
 
 type Connection = {
   serverClock: boolean;
+  browserSupported: boolean;
   socket: WebSocket;
   identity: Identity;
   epoch: string;
@@ -109,6 +113,7 @@ const RequestSchema = z
       "status",
       "disconnect",
       "execute",
+      "browser_execute",
       "query",
       "cancel",
       "output",
@@ -120,6 +125,7 @@ const RequestSchema = z
     deviceId: IdentifierSchema.optional(),
     deviceIds: z.array(IdentifierSchema).min(1).max(50).optional(),
     operation: OperationSchema.optional(),
+    browserOperation: BrowserOperationSchema.optional(),
     query: OperationQuerySchema.optional(),
     outputQuery: OutputQuerySchema.optional(),
     grant: GatewayGrantSchema.optional(),
@@ -214,7 +220,7 @@ export class EmbeddedDeviceGateway {
         return;
       }
       const serverClock = req.headers["x-fastgpt-clock"] === "server-time-v1";
-      sockets.handleUpgrade(req, socket, head, (ws) => void this.connected(ws, identity, serverClock));
+      sockets.handleUpgrade(req, socket, head, (ws) => void this.connected(ws, identity, serverClock, req.headers["x-fastgpt-browser"] === "v1"));
     } catch {
       reject(401);
     } finally {
@@ -252,9 +258,10 @@ export class EmbeddedDeviceGateway {
     connection.expiry.unref();
   }
 
-  private async connected(socket: WebSocket, identity: Identity, serverClock: boolean) {
+  private async connected(socket: WebSocket, identity: Identity, serverClock: boolean, browserSupported: boolean) {
     const connection: Connection = {
       serverClock,
+      browserSupported,
       socket,
       identity,
       epoch: makeId(),
@@ -356,7 +363,7 @@ export class EmbeddedDeviceGateway {
     if (pending.operationId !== operationId || pending.grantId !== grantId) {
       throw new Error("invalid_response_scope");
     }
-    if (frame.type === "exec_error" || frame.type === "grant_error") {
+    if (frame.type === "exec_error" || frame.type === "grant_error" || frame.type === "browser_error") {
       pending.reject(new Error(frame.error));
     } else {
       pending.resolve(frame);
@@ -375,9 +382,9 @@ export class EmbeddedDeviceGateway {
         else if (result) resolve(result);
       };
       const abort = () => {
-        if (frame.type === "exec_start") {
+        if (frame.type === "exec_start" || frame.type === "browser_start") {
           void this.send(connection, {
-            type: "exec_cancel",
+            type: frame.type === "browser_start" ? "browser_cancel" : "exec_cancel",
             requestId,
             operationId: frame.operationId,
           }).catch(() => {});
@@ -413,7 +420,14 @@ export class EmbeddedDeviceGateway {
       if (input.action === "presence") {
         const ids = z.array(IdentifierSchema).min(1).max(50).parse(input.deviceIds);
         return Response.json({
-          data: ids.map((deviceId) => ({ deviceId, online: online(deviceId) })),
+          data: ids.map(deviceId => {
+            const connected = online(deviceId);
+            return {
+              deviceId,
+              online: connected,
+              ...(connected && this.connections.get(deviceId)?.browserSupported ? { browserSupported: true } : {}),
+            };
+          }),
         });
       }
       const deviceId = IdentifierSchema.parse(input.deviceId);
@@ -440,12 +454,18 @@ export class EmbeddedDeviceGateway {
         if (grant.deviceId !== deviceId || !sameOwner(connection.identity, grant)) {
           throw new Error("device_owner_mismatch");
         }
+        if (grant.browserMode && !connection.browserSupported) throw new Error("browser_unavailable");
         frame = {
           type: input.action,
           grantId: grant.grantId,
           grant,
           leaseExpiresAt: input.leaseExpiresAt,
         };
+      } else if (input.action === "browser_execute") {
+        if (!connection.browserSupported) throw new Error("browser_unavailable");
+        const browserRequest = BrowserOperationSchema.parse(input.browserOperation);
+        if (browserRequest.deadline <= Date.now()) throw new Error("operation_expired");
+        frame = { type: "browser_start", operationId: browserRequest.operationId, browserRequest };
       } else if (input.action === "execute") {
         const request = OperationSchema.parse(input.operation);
         frame = { type: "exec_start", operationId: request.operationId, request };
@@ -461,6 +481,10 @@ export class EmbeddedDeviceGateway {
         };
       }
       const result = await this.call(connection, frame, signal);
+      if (input.action === "browser_execute") {
+        if (result.type !== "browser_result") throw new Error("invalid_gateway_response");
+        return Response.json({ data: result.browserResult });
+      }
       const data =
         "grant" in result
           ? result.grant

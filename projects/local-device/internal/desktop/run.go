@@ -24,6 +24,7 @@ func Run(parent context.Context, input connector.StartOptions) error {
 	input.AccountMode = true
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
+	openBrowser := configureBrowser(ctx, &input)
 	type event struct {
 		status          string
 		session         *connector.LocalSession
@@ -106,7 +107,7 @@ func Run(parent context.Context, input connector.StartOptions) error {
 		log.Print("connector: initializing tray")
 		systray.SetIcon(trayIcon())
 		systray.SetTitle("")
-		installStatusHook()
+		installStatusHook(openBrowser != nil)
 		setNativeStatus("connecting")
 		systray.SetTooltip(clientWindowTitle())
 		productItem := systray.AddMenuItem(ProductName, "打开授权管理")
@@ -119,6 +120,23 @@ func Run(parent context.Context, input connector.StartOptions) error {
 		manage := systray.AddMenuItem("授权管理…", "查看授权并添加新的授权")
 		pause := systray.AddMenuItemCheckbox("暂停接收任务", "不打断正在运行的命令", false)
 		// Windows 更新隐藏菜单项会重新插入；旧入口不再创建，权限操作统一放在管理窗口。
+		browserOpen := systray.AddMenuItem("打开伯仁浏览器", "在连接器中打开网页")
+		if openBrowser == nil {
+			browserOpen.Hide()
+		}
+		browserPause := systray.AddMenuItem("暂停浏览器控制", "将浏览器控制权交还给用户")
+		if input.Browser == nil {
+			browserPause.Hide()
+		}
+		browserPaused := false
+		showWindow := func(management bool) {
+			go func() {
+				if err := openBrowser(management); err != nil && ctx.Err() == nil {
+					log.Printf("connector: opening main window: %v", err)
+					_, _ = dialog(ctx, "notice", "连接器主窗口未能打开，请重试。", "")
+				}
+			}()
+		}
 		stop := systray.AddMenuItem("终止当前任务", "请求终止当前命令，不撤销会话授权")
 		stop.Disable()
 		stop.Hide()
@@ -246,40 +264,86 @@ func Run(parent context.Context, input connector.StartOptions) error {
 					startOther(origin, "", grant.AccountAccess{})
 				}
 			}
+			saveSettings := func(value string) error {
+				if closing || switching {
+					return errors.New("连接正在切换，请稍后重试。")
+				}
+				if otherPlatforms[value] != nil {
+					return errors.New("该平台已有账号在线，可在已授权用户中管理。")
+				}
+				origin, err := connector.SavePlatformOrigin(input.StateDirectory, value)
+				if err != nil {
+					return errors.New("无法保存连接设置，请重试。")
+				}
+				input.Origin = origin
+				primaryStatus = "connecting"
+				showStatus()
+				if running {
+					switching = true
+					stopConnection()
+				} else {
+					running = true
+					start(false)
+				}
+				return nil
+			}
+
 			for {
 				select {
-				case reply := <-managementSnapshotRequests:
+				case request := <-managementSnapshotRequests:
+					if invite, ok := strings.CutPrefix(request.action, "invite:"); ok {
+						if request.ctx.Err() == nil {
+							select {
+							case addRequests <- addRequest{value: invite}:
+								request.reply <- managementSnapshot{Status: "正在处理邀请"}
+							default:
+								request.reply <- managementSnapshot{Error: "正在处理其他邀请，请稍后重试。"}
+							}
+						}
+						continue
+					}
+					if strings.HasPrefix(request.action, "settings:") || request.action == "connection-status" {
+						if request.ctx.Err() != nil {
+							continue
+						}
+						var saveError string
+						if value, ok := strings.CutPrefix(request.action, "settings:"); ok {
+							if err := saveSettings(value); err != nil {
+								saveError = err.Error()
+							}
+						}
+						origin := input.Origin
+						if origin == "" {
+							origin = activeOrigin
+						}
+						// 只读连接状态不查询远端授权历史，不能被网络请求拖慢。
+						request.reply <- managementSnapshot{Status: connectionLabel(primaryStatus), State: primaryStatus, Address: origin, Error: saveError}
+						continue
+					}
 					snapshot := make([]*connector.LocalSession, 0, len(locals))
 					for _, local := range locals {
 						snapshot = append(snapshot, local)
 					}
 					status := connectionLabel(connectionStatus)
-					go func() { reply <- managementSnapshot{Status: status, Accounts: accountRows(ctx, snapshot)} }()
+					address := activeOrigin
+					if input.Origin != "" {
+						address = input.Origin
+					}
+					// Network-backed history shares the UI request deadline; a slow
+					// response must not block the tray controller or outlive the refresh.
+					go func() {
+						if request.action != "" {
+							if err := applyManagementAction(request.ctx, snapshot, request.action); err != nil {
+								request.reply <- managementSnapshot{Error: "未能更新授权，请刷新查看当前状态。"}
+								return
+							}
+						}
+						request.reply <- managementSnapshot{Status: status, Address: address, Accounts: accountRows(request.ctx, snapshot)}
+					}()
 				case update := <-events:
 					if update.settingsOrigin != "" {
-						if closing || switching {
-							continue
-						}
-						// 已由其他平台连接维护的地址无需再次启动，避免重复打开身份库。
-						if otherPlatforms[update.settingsOrigin] != nil {
-							go func() {
-								_, _ = dialog(ctx, "notice", "该平台已有账号在线，可直接在已授权用户中管理。", "")
-							}()
-							continue
-						}
-						// 配置写入成功后，串行等待旧连接释放数据库和配对端口。
-						origin, err := connector.SavePlatformOrigin(input.StateDirectory, update.settingsOrigin)
-						if err != nil {
-							go func() { _, _ = dialog(ctx, "notice", "无法保存连接设置，请重试。", "") }()
-							continue
-						}
-						input.Origin = origin
-						if running {
-							switching = true
-							stopConnection()
-						} else {
-							running = true
-							start(false)
+						if err := saveSettings(update.settingsOrigin); err != nil {
+							go func() { _, _ = dialog(ctx, "notice", err.Error(), "") }()
 						}
 					} else if update.statusOrigin != "" {
 						platformStatuses[update.statusOrigin] = update.status
@@ -337,8 +401,9 @@ func Run(parent context.Context, input connector.StartOptions) error {
 						update.session.Service.SetPaused(paused || closing)
 						close(update.ack)
 					} else if update.removed != "" {
-						delete(locals, update.removed)
-						delete(locals, activeOrigin+"#"+update.removed)
+						for _, key := range []string{update.removed, activeOrigin + "#" + update.removed} {
+							delete(locals, key)
+						}
 					} else if update.finished {
 						primaryStatus = "error"
 						showStatus()
@@ -395,6 +460,10 @@ func Run(parent context.Context, input connector.StartOptions) error {
 						}
 					}()
 				case <-manage.ClickedCh:
+					if openBrowser != nil {
+						showWindow(true)
+						continue
+					}
 					current, _ := connector.ResolvePlatform(ctx, connector.PlatformOptions{Directory: input.StateDirectory, Origin: input.Origin, DefaultOrigin: PlatformOrigin})
 					snapshot := make([]*connector.LocalSession, 0, len(locals))
 					for _, local := range locals {
@@ -467,6 +536,20 @@ func Run(parent context.Context, input connector.StartOptions) error {
 					}
 					for _, local := range locals {
 						local.Service.SetPaused(paused)
+					}
+				case <-browserOpen.ClickedCh:
+					if openBrowser != nil {
+						showWindow(false)
+					}
+				case <-browserPause.ClickedCh:
+					if input.Browser != nil {
+						browserPaused = !browserPaused
+						input.Browser.SetPaused(browserPaused)
+						if browserPaused {
+							browserPause.SetTitle("恢复浏览器控制")
+						} else {
+							browserPause.SetTitle("暂停浏览器控制")
+						}
 					}
 				case <-stop.ClickedCh:
 					stopped := false

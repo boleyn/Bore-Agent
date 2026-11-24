@@ -5,17 +5,19 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fastgpt.local/local-device/internal/transport"
+	"log"
 	"net/http"
 	"net/url"
 	"sync"
 	"time"
 
+	"fastgpt.local/local-device/internal/browser"
 	"fastgpt.local/local-device/internal/grant"
 	"fastgpt.local/local-device/internal/journal"
 	"fastgpt.local/local-device/internal/operation"
 	"fastgpt.local/local-device/internal/protocol"
 	"fastgpt.local/local-device/internal/remoteclock"
+	"fastgpt.local/local-device/internal/transport"
 	"github.com/coder/websocket"
 )
 
@@ -28,6 +30,8 @@ type Options struct {
 	Service       *operation.Service
 	HTTPClient    *http.Client
 	OnConnected   func()
+	// HandleBrowser resolves the locally bound target after the session checks its lease.
+	HandleBrowser func(context.Context, grant.Owner, browser.Request) (json.RawMessage, error)
 	Prepare       func(context.Context, operation.Request) (context.Context, operation.Request, context.CancelFunc, error)
 }
 
@@ -51,6 +55,9 @@ func Connect(ctx context.Context, input Options) error {
 	if input.OpenSession != nil {
 		headers.Set("X-FastGPT-Clock", "server-time-v1")
 	}
+	if input.HandleBrowser != nil && input.OpenSession != nil {
+		headers.Set("X-FastGPT-Browser", "v1")
+	}
 	socket, _, err := websocket.Dial(ctx, input.URL, &websocket.DialOptions{
 		HTTPClient: &safeClient, HTTPHeader: headers,
 	})
@@ -73,6 +80,7 @@ func Connect(ctx context.Context, input Options) error {
 	}
 	clock := remoteclock.New()
 	clock.Observe(welcome.ServerTime)
+	var browserGrants *grant.Manager
 	var lifetime *ExecutionLifetime
 	var generation uint64
 	allowGrace := false
@@ -94,6 +102,7 @@ func Connect(ctx context.Context, input Options) error {
 		}
 		input.Prepare = local.Grants.Prepare
 		input.HandleGrant = local.Control
+		browserGrants = local.Grants
 		lifetime = local.Lifetime
 		if lifetime != nil {
 			generation, err = lifetime.attach()
@@ -124,6 +133,7 @@ func Connect(ctx context.Context, input Options) error {
 	}
 	slots := make(chan struct{}, 8)
 	type activeCommand struct {
+		cancelType  string
 		operationID string
 		cancel      context.CancelFunc
 	}
@@ -136,7 +146,7 @@ func Connect(ctx context.Context, input Options) error {
 			return err
 		}
 		frame, err := protocol.Decode(data)
-		if err != nil || kind != websocket.MessageText || (frame.Type != "auth_refreshed" && frame.Type != "exec_output_query" && frame.Type != "exec_query" && frame.Type != "exec_cancel_query" && frame.Type != "exec_start" && frame.Type != "exec_cancel" && frame.Type != "grant_request" && frame.Type != "grant_renew" && frame.Type != "grant_revoke") || frame.Epoch != welcome.Epoch {
+		if err != nil || kind != websocket.MessageText || (frame.Type != "auth_refreshed" && frame.Type != "exec_output_query" && frame.Type != "exec_query" && frame.Type != "exec_cancel_query" && frame.Type != "browser_start" && frame.Type != "browser_cancel" && frame.Type != "exec_start" && frame.Type != "exec_cancel" && frame.Type != "grant_request" && frame.Type != "grant_renew" && frame.Type != "grant_revoke") || frame.Epoch != welcome.Epoch {
 			return errors.New("invalid_gateway_frame")
 		}
 		// Negotiate once: a capable server must timestamp every frame. Never
@@ -156,9 +166,9 @@ func Connect(ctx context.Context, input Options) error {
 			}
 			continue
 		}
-		if frame.Type == "exec_cancel" {
+		if frame.Type == "exec_cancel" || frame.Type == "browser_cancel" {
 			activeMu.Lock()
-			if task, ok := active[frame.RequestID]; ok && task.operationID == frame.OperationID {
+			if task, ok := active[frame.RequestID]; ok && task.operationID == frame.OperationID && task.cancelType == frame.Type {
 				task.cancel()
 			}
 			activeMu.Unlock()
@@ -172,7 +182,7 @@ func Connect(ctx context.Context, input Options) error {
 		taskCtx := sessionCtx
 		managedExecution := frame.Type == "exec_start" && lifetime != nil
 		finishTask := func() {}
-		if frame.Type == "exec_start" {
+		if frame.Type == "exec_start" || frame.Type == "browser_start" {
 			var stopTask context.CancelFunc
 			if managedExecution {
 				taskCtx, stopTask, finishTask, err = lifetime.begin(generation, welcome.Epoch+"/"+frame.RequestID)
@@ -191,7 +201,11 @@ func Connect(ctx context.Context, input Options) error {
 			}
 			// Register before launching the worker so an immediately following cancel
 			// cannot be lost before the command has started.
-			active[frame.RequestID] = activeCommand{operationID: frame.OperationID, cancel: stopTask}
+			cancelType := "exec_cancel"
+			if frame.Type == "browser_start" {
+				cancelType = "browser_cancel"
+			}
+			active[frame.RequestID] = activeCommand{operationID: frame.OperationID, cancel: stopTask, cancelType: cancelType}
 			activeMu.Unlock()
 		}
 		if !managedExecution {
@@ -204,13 +218,70 @@ func Connect(ctx context.Context, input Options) error {
 				defer workers.Done()
 			}
 			defer func() { <-slots }()
-			if frame.Type == "exec_start" {
+			if frame.Type == "exec_start" || frame.Type == "browser_start" {
 				defer func() {
 					activeMu.Lock()
 					active[frame.RequestID].cancel()
 					delete(active, frame.RequestID)
 					activeMu.Unlock()
 				}()
+			}
+			if frame.Type == "browser_start" {
+				started := time.Now()
+				response := protocol.Frame{
+					Version: protocol.Version, Epoch: welcome.Epoch,
+					RequestID: frame.RequestID, OperationID: frame.OperationID,
+					Type: "browser_error", Error: "browser_unavailable",
+				}
+				request, err := browser.DecodeRequest(frame.BrowserRequest)
+				if err == nil && input.HandleBrowser != nil && welcome.Owner != nil && browserGrants != nil {
+					remaining := time.UnixMilli(request.Deadline).Sub(clock.Now())
+					if remaining <= 0 || remaining > 10*time.Minute {
+						response.Error = "operation_expired"
+					} else {
+						runCtx, stop := context.WithTimeout(taskCtx, remaining)
+						leaseCtx, release, err := browserGrants.PrepareBrowser(runCtx, request.GrantID, request.GrantVersion)
+						var result json.RawMessage
+						if err == nil {
+							result, err = input.HandleBrowser(leaseCtx, *welcome.Owner, request)
+							if err == nil && leaseCtx.Err() != nil {
+								err = errors.New("browser_outcome_unknown")
+							}
+							release()
+						}
+						stop()
+						response.Error = "browser_operation_rejected"
+						if err == nil && len(result) <= protocol.MaxFrameBytes-4096 && json.Valid(result) {
+							response.Type = "browser_result"
+							response.Error = ""
+							response.BrowserResult = result
+						} else if err != nil {
+							switch err.Error() {
+							case "grant_revoked", "browser_grant_missing", "browser_paused", "browser_busy",
+								"browser_snapshot_required", "browser_site_approval_required", "browser_element_unavailable",
+								"browser_operation_already_dispatched", "browser_screenshot_too_large", "browser_outcome_unknown":
+								response.Error = err.Error()
+							}
+						}
+					}
+				}
+				status := response.Error
+				if status == "" {
+					status = "completed"
+				}
+				log.Printf("browser operation finished operationId=%s action=%s status=%s elapsedMs=%d",
+					frame.OperationID, request.Action.Name, status, time.Since(started).Milliseconds())
+				encoded, err := json.Marshal(response)
+				if err != nil {
+					cancel()
+					return
+				}
+				writeCtx, stop := context.WithTimeout(sessionCtx, 10*time.Second)
+				defer stop()
+				if socket.Write(writeCtx, websocket.MessageText, encoded) != nil {
+					cancel()
+				}
+				return
 			}
 			if frame.Grant != nil {
 				response := protocol.Frame{Version: protocol.Version, Epoch: welcome.Epoch, RequestID: frame.RequestID, GrantID: frame.GrantID, Type: "grant_error", Error: "grant_unavailable"}
@@ -313,7 +384,7 @@ func grantControlError(err error) string {
 		return "grant_workdir_invalid"
 	case "grant_version_conflict", "grant_scope_mismatch", "local_confirmation_expired":
 		return "grant_permission_conflict"
-	case "grant_revoked", "grant_unavailable", "grant_expired", "invalid_execution_lease", "account_access_paused", "account_access_removed":
+	case "browser_unavailable", "browser_extension_version_mismatch", "grant_revoked", "grant_unavailable", "grant_expired", "invalid_execution_lease", "account_access_paused", "account_access_removed":
 		return err.Error()
 	default:
 		return "grant_rejected"
