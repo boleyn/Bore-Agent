@@ -49,7 +49,7 @@ flowchart LR
     User["用户浏览器 / 桌面端"] -->|HTTPS / SSE| Web["Agent 网关与前端页面 (bore-agent)"]
     Web -->|Gateway 编排| Agent["Hermes Agent (app / tools / plugins / skills)"]
     Agent -->|MCP / LLM API| LLM["模型服务 (AIProxy / OpenAI 兼容)"]
-    Agent -->|remote-vm (HTTP Exec)| Sandbox["云主机沙盒 (agent-sandbox)"]
+    Agent -->|"remote-vm (HTTP Exec)"| Sandbox["云主机沙盒 (agent-sandbox)"]
     Agent -->|WS/WSS 长连接 + 本机授权| Local["本地电脑客户端 (local-device)"]
     Agent -->|目录挂载| Connector["本机连接器 (agent-connector)"]
     Web -->|数据持久化| DB["MongoDB + S3 / MinIO"]
