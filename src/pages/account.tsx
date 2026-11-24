@@ -1,6 +1,5 @@
-import { useEffect, useState } from "react";
 import type { GetServerSideProps } from "next";
-import { useRouter } from "next/router";
+import NextLink from "next/link";
 import {
   Avatar,
   Badge,
@@ -13,72 +12,13 @@ import {
   HStack,
   Spinner,
   Text,
-  useToast,
 } from "@chakra-ui/react";
 
-import { clearAuthToken, withAuthHeaders } from "@features/auth/client/authClient";
+import { useAuth } from "@/contexts/AuthContext";
 import { getAuthUserFromRequest } from "@server/auth/ssr";
 
-type AuthUser = {
-  id: string;
-  username: string;
-  displayName?: string;
-  contact?: string;
-  avatar?: string;
-  provider?: string;
-};
-
 const AccountPage = () => {
-  const router = useRouter();
-  const toast = useToast();
-  const [user, setUser] = useState<AuthUser | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const loadUser = async () => {
-      try {
-        const response = await fetch("/api/auth/me", {
-          headers: withAuthHeaders(),
-        });
-        if (!response.ok) {
-          throw new Error("获取用户信息失败");
-        }
-        const data = (await response.json()) as { user?: AuthUser } | AuthUser;
-        setUser((data as { user?: AuthUser }).user ?? (data as AuthUser));
-      } catch (error) {
-        toast({
-          title: "加载失败",
-          description: error instanceof Error ? error.message : "未知错误",
-          status: "error",
-          duration: 3000,
-          isClosable: true,
-        });
-      } finally {
-        setLoading(false);
-      }
-    };
-    loadUser();
-  }, [toast]);
-
-  const handleLogout = async () => {
-    try {
-      const response = await fetch("/api/auth/logout", { method: "POST" });
-      if (!response.ok) {
-        throw new Error("退出登录失败");
-      }
-    } catch (error) {
-      toast({
-        title: "退出失败",
-        description: error instanceof Error ? error.message : "未知错误",
-        status: "error",
-        duration: 3000,
-        isClosable: true,
-      });
-    } finally {
-      clearAuthToken();
-      router.replace("/login");
-    }
-  };
+  const { user, loading, logout } = useAuth();
 
   return (
     <Flex minH="100vh" bg="gray.50" px={{ base: 6, lg: 12 }} py={{ base: 8, lg: 10 }}>
@@ -90,7 +30,7 @@ const AccountPage = () => {
             </Heading>
             <Text color="gray.600">查看你的账户信息与登录状态。</Text>
           </Box>
-          <Button variant="outline" onClick={() => router.push("/")}>
+          <Button variant="outline" as={NextLink} href="/">
             返回工作台
           </Button>
         </Flex>
@@ -118,7 +58,7 @@ const AccountPage = () => {
                     用户 ID：{user?.id || "-"}
                   </Text>
                 </Box>
-                <Button colorScheme="red" onClick={handleLogout}>
+                <Button colorScheme="red" onClick={logout}>
                   退出登录
                 </Button>
               </Flex>

@@ -141,22 +141,43 @@ export default function AgentWorkspace({
     if (window.matchMedia("(max-width: 767px)").matches) setSidebarOpen(false);
   };
 
-  const [activeToken, setActiveToken] = useState<string>(initialProjectToken || "");
-  const [activeChatId, setActiveChatId] = useState<string | undefined>(undefined);
+  const [selectedProjectToken, setActiveToken] = useState<string>(initialProjectToken || "");
+  const [embeddedChatId, setEmbeddedChatId] = useState<string | undefined>(undefined);
+  const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>({});
   const router = useRouter();
   const { query } = router;
   const parsedRoute = parseWorkspaceRoute(router.asPath, query);
   const activeNav: WorkspaceView = parsedRoute.view;
-  const visibleChatId =
-    parsedRoute.view === "chat"
-      ? (parsedRoute.conversationId || activeChatId)
-      : activeChatId;
-  const visibleChatIdRef = useRef(visibleChatId);
-  visibleChatIdRef.current = visibleChatId;
-  const [libraryDraft,setLibraryDraft] = useState<{chatId:string;files:File[];text?:string;imageMode?:boolean}>();
-  const [newConvSignal, setNewConvSignal] = useState(0);
+  const routeChatId = activeNav === "chat" ? parsedRoute.conversationId : undefined;
+  const routeProjectToken = activeNav === "chat" && typeof query.workspaceProject === "string"
+    ? query.workspaceProject
+    : undefined;
+  const linkedProject = routeChatId && projects.find((project) =>
+    project.conversations.some((conversation) => conversation.id === routeChatId),
+  );
+  const routeProject = linkedProject || projects.find((project) => project.token === routeProjectToken);
+  const activeToken = routeProject?.token || (
+    activeNav === "chat" && !routeChatId
+      ? initialProjectToken || projects[0]?.token || ""
+      : selectedProjectToken
+  );
+  const visibleChatId = activeNav === "chat" ? routeChatId : embeddedChatId;
+  const lastChatRoute = useRef<{ token: string; chatId?: string }>();
 
-  const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>({});
+  const resolvedProjectToken = routeProject?.token;
+  useEffect(() => {
+    if (!resolvedProjectToken) return;
+    setActiveToken(resolvedProjectToken);
+    setExpandedProjects((prev) => prev[resolvedProjectToken] ? prev : { ...prev, [resolvedProjectToken]: true });
+  }, [resolvedProjectToken]);
+
+  useEffect(() => {
+    if (activeNav === "chat" && activeToken) {
+      lastChatRoute.current = { token: activeToken, chatId: routeChatId };
+    }
+  }, [activeNav, activeToken, routeChatId]);
+
+  const [libraryDraft,setLibraryDraft] = useState<{chatId:string;files:File[];text?:string;imageMode?:boolean}>();
 
   // 右侧浮动资源卡（输出 / 来源）与文件预览抽屉
   const [floatingResourcesOpen, setFloatingResourcesOpen] = useState(false);
@@ -189,7 +210,7 @@ export default function AgentWorkspace({
     setSelectedFilePath("");
     setArtifactVersion(undefined);
     setFilesDrawerOpen(false);
-  }, [activeToken, activeChatId, newConvSignal]);
+  }, [activeToken, visibleChatId]);
 
   const devicesModal = useDisclosure();
   const [deviceAccessByProject, setDeviceAccessByProject] = useState<Record<string, DeviceAccess | undefined>>({});
@@ -230,15 +251,18 @@ export default function AgentWorkspace({
     });
     void router.push(loc.href, loc.as, { shallow: true, scroll: false });
   }
-  function setActiveNav(view: WorkspaceView, conversation?: string) {
-    if (view === activeNav && !conversation) return;
+  function setActiveNav(view: WorkspaceView) {
+    if (view === activeNav) return;
     if (view !== "library") {
       setLibrarySearch("");
     }
+    if (view === "chat" && lastChatRoute.current) {
+      const { token, chatId } = lastChatRoute.current;
+      return navigateToChat(token, chatId);
+    }
     const loc = buildWorkspaceLocation(router.pathname, {
       view,
-      conversationId: view === "chat" ? (conversation ?? activeChatId) : undefined,
-      extraQuery: router.pathname === "/project/[di]" ? { di: router.query.di } : undefined,
+      extraQuery: { di: query.di },
     });
     return router.push(loc.href, loc.as, { shallow: true, scroll: false });
   }
@@ -247,9 +271,8 @@ export default function AgentWorkspace({
   const selectScheduleConversation = useCallback((task: typeof scheduleConversation) => {
     setScheduleConversation(task);
     if (!task) return;
-    setNewConvSignal(0);
     setActiveToken(task.token);
-    setActiveChatId(task.chatId);
+    setEmbeddedChatId(task.chatId);
   }, []);
   const [pinnedProjectTokens, setPinnedProjectTokens] = useState<string[]>(() => {
     if (typeof window === "undefined") return [];
@@ -292,7 +315,7 @@ export default function AgentWorkspace({
       if (Array.isArray(data) && data.length > 0) {
         const explicitProject = data.find((project) => project.token === initialProjectToken);
         const linkedProject = data.find((project) =>
-          project.conversations.some((conversation) => conversation.id === visibleChatIdRef.current),
+          project.conversations.some((conversation) => conversation.id === lastChatRoute.current?.chatId),
         );
         const target = (explicitProject ?? linkedProject ?? data[0]).token;
         setActiveToken((prev) => prev && data.some((project) => project.token === prev) ? prev : target);
@@ -395,49 +418,35 @@ export default function AgentWorkspace({
     setExpandedProjects((prev) => ({ ...prev, [token]: !prev[token] }));
   };
 
+  function navigateToChat(token: string, chatId?: string, replace = false) {
+    const listedConversation = chatId && projects.some((project) =>
+      project.token === token && project.conversations.some((conversation) => conversation.id === chatId),
+    );
+    const isProjectRoute = router.pathname === "/project/[di]";
+    const switchesProjectPage = isProjectRoute && query.di !== token;
+    const loc = buildWorkspaceLocation(isProjectRoute && !token ? "/" : router.pathname, {
+      view: "chat",
+      conversationId: chatId,
+      extraQuery: isProjectRoute ? { di: token } : { workspaceProject: listedConversation ? undefined : token },
+    });
+    return router[replace ? "replace" : "push"](loc.href, loc.as, {
+      shallow: !switchesProjectPage,
+      scroll: false,
+    });
+  }
+
   const handleSelectProject = (token: string) => {
     closeMobileSidebar();
-    setNewConvSignal(0);
-    setActiveToken(token);
-    setActiveChatId(undefined);
     setExpandedProjects((prev) => ({ ...prev, [token]: true }));
-    if (activeNav === "chat") {
-      const loc = buildWorkspaceLocation(router.pathname, {
-        view: "chat",
-        extraQuery: router.pathname === "/project/[di]" ? { di: router.query.di } : undefined,
-      });
-      void router.push(loc.href, loc.as, { shallow: true, scroll: false });
-    }
+    void navigateToChat(token);
   };
 
   const handleSelectConversation = (token: string, chatId: string) => {
     closeMobileSidebar();
-    setNewConvSignal(0);
-    setActiveToken(token);
-    setActiveChatId(chatId);
-    setExpandedProjects((prev) => ({ ...prev, [token]: true }));
-    if (activeNav === "chat") {
-      const loc = buildWorkspaceLocation(router.pathname, {
-        view: "chat",
-        conversationId: chatId,
-        extraQuery: router.pathname === "/project/[di]" ? { di: router.query.di } : undefined,
-      });
-      void router.push(loc.href, loc.as, { shallow: true, scroll: false });
-    }
+    return navigateToChat(token, chatId);
   };
 
-  const handleNewConversationInProject = (token: string) => {
-    closeMobileSidebar();
-    setExpandedProjects((prev) => ({ ...prev, [token]: true }));
-    setActiveToken(token);
-    setActiveChatId(undefined);
-    setNewConvSignal((n) => n + 1);
-    const loc = buildWorkspaceLocation(router.pathname, {
-      view: "chat",
-      extraQuery: router.pathname === "/project/[di]" ? { di: router.query.di } : undefined,
-    });
-    void router.push(loc.href, loc.as, { shallow: true, scroll: false });
-  };
+  const handleNewConversationInProject = handleSelectProject;
 
   const directoryRequest = useRef(0);
   const fetchDeviceWorkdirs = async (deviceId: string, directory?: string) => {
@@ -492,9 +501,7 @@ export default function AgentWorkspace({
       setNewWorkspaceWorkdir("");
       createModal.onClose();
       await fetchProjects();
-      setNewConvSignal(0);
-      setActiveToken(created.token);
-      setActiveChatId(undefined);
+      await navigateToChat(created.token);
       setExpandedProjects((prev) => ({ ...prev, [created.token]: true }));
     } catch (error) {
       toast({
@@ -556,11 +563,13 @@ export default function AgentWorkspace({
     try {
       await apiJson(`/projects?token=${encodeURIComponent(token)}`, { method: "DELETE" });
       setProjects((prev) => prev.filter((p) => p.token !== token));
-      if (activeToken === token) {
+      if (router.pathname === "/project/[di]" && query.di === token) {
+        await router.replace("/");
+      } else if (activeToken === token) {
         const remaining = projects.filter((p) => p.token !== token);
-        setNewConvSignal(0);
         setActiveToken(remaining[0]?.token || "");
-        setActiveChatId(undefined);
+        setEmbeddedChatId(undefined);
+        if (activeNav === "chat") await navigateToChat(remaining[0]?.token || "", undefined, true);
       }
       toast({ title: `已删除项目「${name}」`, status: "success", duration: 2000 });
     } catch (error) {
@@ -579,7 +588,8 @@ export default function AgentWorkspace({
         body: JSON.stringify({ appId: token, chatId }),
       });
       await fetchProjects();
-      if (activeChatId === chatId) setActiveChatId(undefined);
+      if (embeddedChatId === chatId) setEmbeddedChatId(undefined);
+      if (routeChatId === chatId) await navigateToChat(token, undefined, true);
     } catch (error) {
       toast({
         title: "删除会话失败",
@@ -785,11 +795,10 @@ export default function AgentWorkspace({
                 hideSkillsManager
                 defaultHeaderTitle={activeProject.name}
                 completionsExtraBody={completionsExtraBody}
-                externalActiveConversationId={activeChatId}
+                externalActiveConversationId={currentFileChat?.chatId ?? (activeNav === "schedules" ? scheduleConversation?.chatId : undefined)}
                 externalConversationRevision={activeNav === "schedules" && scheduleConversation
                   ? `${scheduleConversation.nextAt}:${scheduleConversation.state}:${scheduleConversation.lastResult ?? ""}`
                   : undefined}
-                externalNewConversationSignal={newConvSignal}
                 onConversationsChanged={() => void fetchProjects()}
                 onConversationResourcesChanged={setConversationResources}
                 onFilesUpdated={(files) => {
@@ -884,8 +893,7 @@ export default function AgentWorkspace({
               size="sm"
               variant="ghost"
               color="ink.secondary"
-              onClick={async () => {
-                await setActiveNav("chat");
+              onClick={() => {
                 if (activeProject) handleNewConversationInProject(activeProject.token);
                 else createModal.onOpen();
               }}
@@ -937,8 +945,8 @@ export default function AgentWorkspace({
       </Flex>
 
       {/* 根据最左 Icon Rail 选择渲染对应主视图（对话区始终保活不卸载，避免切换视图中断生成） */}
-      {activeNav === "library" && <LibraryView query={librarySearch} setQuery={setLibrarySearch} sidebar={librarySidebarOpen} onCollapseSidebar={()=>{setLibrarySidebarOpen(false);libraryNavButton.current?.focus();}} fileChatWidth={fileChatWidth} setFileChatWidth={setFileChatWidth} fileChatOpen={fileChatOpen} resumeFileChat={currentFileChat?.minimized ? ()=>setFileChat({...currentFileChat,minimized:false}) : undefined} projects={projects} onProject={token => { handleSelectProject(token); setActiveNav("chat"); }} onChat={async (files,text,itemId,imageMode,projectToken) => {
-        const existingChat = itemId && fileChat?.itemId === itemId && fileChat.chatId === activeChatId ? fileChat : undefined;
+      {activeNav === "library" && <LibraryView query={librarySearch} setQuery={setLibrarySearch} sidebar={librarySidebarOpen} onCollapseSidebar={()=>{setLibrarySidebarOpen(false);libraryNavButton.current?.focus();}} fileChatWidth={fileChatWidth} setFileChatWidth={setFileChatWidth} fileChatOpen={fileChatOpen} resumeFileChat={currentFileChat?.minimized ? ()=>setFileChat({...currentFileChat,minimized:false}) : undefined} projects={projects} onProject={handleSelectProject} onChat={async (files,text,itemId,imageMode,projectToken) => {
+        const existingChat = itemId && fileChat?.itemId === itemId && fileChat.chatId === embeddedChatId ? fileChat : undefined;
         // Library chats already carry their files and should work without a paired device.
         const cloudProject = (project: ProjectWithConversations) => project.workspace?.kind !== "connector";
         let token = existingChat?.projectToken || projectToken ||
@@ -962,18 +970,19 @@ export default function AgentWorkspace({
         if (!existingChat && !projectLoaded) {
           await fetchProjects();
         }
-        handleSelectConversation(token,chat.id);
-        await setActiveNav(itemId ? "library" : "chat", chat.id);
+        if (itemId) {
+          setActiveToken(token);
+          setEmbeddedChatId(chat.id);
+        } else {
+          await handleSelectConversation(token, chat.id);
+        }
         if (!existingChat && projectLoaded) await fetchProjects();
-      }} onBack={() => setActiveNav("chat")} onOpen={(token, chatId) => { handleSelectConversation(token, chatId); setActiveNav("chat", chatId); }} />}
+      }} onBack={() => setActiveNav("chat")} onOpen={handleSelectConversation} />}
       {activeNav === "projects" && (
         <ProjectsDirectoryView
           projects={projects}
           pinnedTokens={pinnedProjectTokens}
-          onSelectProject={(token) => {
-            handleSelectProject(token);
-            setActiveNav("chat");
-          }}
+          onSelectProject={handleSelectProject}
           onCreateProject={createModal.onOpen}
           onTogglePin={togglePinProject}
           onOpenSettings={(project) => {
@@ -994,7 +1003,7 @@ export default function AgentWorkspace({
           })))}
           onSelectConversation={selectScheduleConversation}
           conversation={scheduleConversation && activeProject?.token === scheduleConversation.token ? conversationPane : null}
-          onOpen={(token, chatId) => { handleSelectConversation(token, chatId); setActiveNav("chat", chatId); }}
+          onOpen={handleSelectConversation}
         />
       )}
       <Flex

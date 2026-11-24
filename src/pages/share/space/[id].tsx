@@ -40,7 +40,7 @@ function SharedSpaceContents() {
       const value = await response.json();
       if (controller.signal.aborted) return;
       if (value?.owner === true) {
-        await router.replace({pathname:"/",query:{view:"library",libraryFolder:id,...(typeof page === "string" ? {libraryItem:page} : {})}});
+        await router.replace({pathname:"/library",query:{libraryFolder:id,...(typeof page === "string" ? {libraryItem:page} : {})}});
         return;
       }
       if (typeof value?.name !== "string" || (page ? typeof value.body !== "string" :
@@ -57,7 +57,7 @@ function SharedSpaceContents() {
   const spacePath = typeof id === "string" ? "/share/space/"+encodeURIComponent(id) : undefined;
   return <Box as="main" maxW="780px" mx="auto" p={6}>
     {spacePath && <Button as={NextLink} variant="ghost" mb={4}
-      href={page ? spacePath : "/?"+new URLSearchParams({view:"library",libraryTab:"与你共享"})}>
+      href={page ? spacePath : "/library?"+new URLSearchParams({libraryTab:"与你共享"})}>
       {page ? "返回共享空间" : "返回「与你共享」"}
     </Button>}
     {error ? <Stack align="center" spacing={3} maxW="26rem" mx="auto" py="12vh" textAlign="center">

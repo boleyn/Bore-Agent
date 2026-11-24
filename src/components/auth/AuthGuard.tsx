@@ -1,58 +1,31 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect } from "react";
 import { useRouter } from "next/router";
 import { Flex, Spinner } from "@chakra-ui/react";
-import { clearAuthToken, getAuthToken, withAuthHeaders } from "@features/auth/client/authClient";
+import { useAuth } from "@/contexts/AuthContext";
 
-const PUBLIC_ROUTES = new Set<string>([
+const PUBLIC_ROUTES = new Set([
   "/login",
   "/auth/feishu/login",
   "/auth/feishu/callback",
   "/feishu/oauth/callback",
   "/share/preview/[shareId]",
+  "/s/[slug]",
+  "/404",
+  "/500",
+  "/_error",
 ]);
 
 const AuthGuard = ({ children }: { children: React.ReactNode }) => {
-  const router = useRouter();
-  const [checking, setChecking] = useState(true);
-  const isPublic = useMemo(() => PUBLIC_ROUTES.has(router.pathname), [router.pathname]);
+  const { isReady, pathname, asPath, replace } = useRouter();
+  const { user, loading } = useAuth();
+  const isPublic = PUBLIC_ROUTES.has(pathname);
 
   useEffect(() => {
-    if (!router.isReady) return;
-    if (isPublic) {
-      setChecking(false);
-      return;
-    }
+    if (!isReady || isPublic || loading || user) return;
+    void replace({ pathname: "/login", query: { lastRoute: asPath } });
+  }, [isReady, isPublic, loading, user, asPath, replace]);
 
-    const token = getAuthToken();
-    if (!token) {
-      router.replace(`/login?lastRoute=${encodeURIComponent(router.asPath)}`);
-      return;
-    }
-
-    const controller = new AbortController();
-    const verify = async () => {
-      try {
-        const response = await fetch("/api/auth/me", { headers: withAuthHeaders(), signal: controller.signal });
-        if (controller.signal.aborted || getAuthToken() !== token) return;
-        if (!response.ok) {
-          if (response.status === 401) clearAuthToken();
-          router.replace(`/login?lastRoute=${encodeURIComponent(router.asPath)}`);
-          return;
-        }
-      } catch {
-        if (controller.signal.aborted || getAuthToken() !== token) return;
-        router.replace(`/login?lastRoute=${encodeURIComponent(router.asPath)}`);
-        return;
-      }
-
-      setChecking(false);
-    };
-
-    void verify();
-    return () => controller.abort();
-  }, [router, isPublic]);
-
-  if (checking && !isPublic) {
+  if (!isPublic && (loading || !user)) {
     return (
       <Flex minH="100vh" align="center" justify="center" bg="gray.50">
         <Spinner size="xl" color="blue.500" />

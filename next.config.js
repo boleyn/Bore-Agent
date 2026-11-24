@@ -9,10 +9,10 @@ const nextConfig = {
   },
   async rewrites() {
     return [
-      { source: "/c/:conversationId", destination: "/" },
-      { source: "/library", destination: "/" },
-      { source: "/projects", destination: "/" },
-      { source: "/schedules", destination: "/" },
+      { source: "/c/:conversationId", destination: "/?__workspaceConversation=:conversationId" },
+      { source: "/library", destination: "/?__workspaceView=library" },
+      { source: "/projects", destination: "/?__workspaceView=projects" },
+      { source: "/schedules", destination: "/?__workspaceView=schedules" },
     ];
   },
   webpack(config, { webpack }) {

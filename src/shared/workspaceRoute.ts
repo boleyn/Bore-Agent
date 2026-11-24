@@ -31,6 +31,14 @@ function getSingleQuery(
   return undefined;
 }
 
+function decodePathSegment(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 /**
  * 解析当前工作区路由（对齐 ChatGPT 路径规范，同时向下兼容旧的 ?view= / ?conversation= 参数）：
  * - /                  -> chat (新聊天/主页)
@@ -57,11 +65,7 @@ export function parseWorkspaceRoute(
   if (pathname.startsWith("/c/")) {
     const rawId = pathname.slice(3).split("/")[0];
     if (rawId) {
-      try {
-        return { view: "chat", conversationId: decodeURIComponent(rawId) };
-      } catch {
-        return { view: "chat", conversationId: rawId };
-      }
+      return { view: "chat", conversationId: decodePathSegment(rawId) };
     }
     return { view: "chat" };
   }
@@ -75,6 +79,17 @@ export function parseWorkspaceRoute(
     view: "chat",
     conversationId: getSingleQuery(query, "conversation"),
   };
+}
+
+/** Recover the public URL when Pages Router resolves a workspace rewrite to "/". */
+export function getWorkspaceReturnPath(resolvedUrl: string, query: ParsedUrlQuery): string {
+  const view = query.__workspaceView;
+  const conversation = getSingleQuery(query, "__workspaceConversation");
+  const search = new URL(resolvedUrl, "http://localhost").search;
+
+  if (conversation) return `/c/${encodeURIComponent(decodePathSegment(conversation))}${search}`;
+  if (view === "library" || view === "projects" || view === "schedules") return `/${view}${search}`;
+  return resolvedUrl;
 }
 
 function serializeQuery(params: Record<string, string | string[]>): string {
@@ -109,7 +124,7 @@ export function buildWorkspaceLocation(
 
   const cleanExtra: Record<string, string | string[]> = {};
   for (const [key, value] of Object.entries(extraQuery)) {
-    if (key === "view" || key === "conversation" || key === "di") continue;
+    if (["view", "conversation", "di", "__workspaceView", "__workspaceConversation"].includes(key)) continue;
     if (value === undefined) continue;
     if (typeof value === "string" && value === "") continue;
     cleanExtra[key] = value;

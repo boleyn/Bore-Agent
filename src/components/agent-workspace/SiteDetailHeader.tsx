@@ -1,3 +1,4 @@
+import NextLink from "next/link";
 import type { ReactNode } from "react";
 import { Box, Button, Flex, Heading, Link } from "@chakra-ui/react";
 import { ChevronLeft, ExternalLink, Pencil } from "lucide-react";
@@ -15,7 +16,7 @@ export default function SiteDetailHeader({name, previewPath, editUrl, onBack, sa
   return <>
     <Flex align="center" gap={2}>
       {onBack ? <Button {...backStyle} onClick={onBack} isDisabled={saving}>网站</Button>
-        : <Button {...backStyle} as="a" href="/?view=library&librarySection=站点">网站</Button>}
+        : <Button {...backStyle} as={NextLink} href={{ pathname: "/library", query: { librarySection: "站点" } }}>网站</Button>}
       <Button as="a" size="sm" href={previewPath} target="_blank" rel="noopener noreferrer" leftIcon={<ExternalLink size={15}/>}>访问</Button>
       {editUrl && <Button as="a" size="sm" href={editUrl} leftIcon={<Pencil size={15}/>}>编辑</Button>}
     </Flex>

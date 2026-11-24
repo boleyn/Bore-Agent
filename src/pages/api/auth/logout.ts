@@ -11,6 +11,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const token = getAuthTokenFromRequest(req);
+  clearAuthCookie(res);
+  res.status(200).json({ ok: true });
+
   if (token) {
     try {
       const payload = verifyAuthToken(token);
@@ -21,7 +24,4 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // ignore invalid/expired token during logout
     }
   }
-
-  clearAuthCookie(res);
-  res.status(200).json({ ok: true });
 }

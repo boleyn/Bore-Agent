@@ -3,6 +3,7 @@ import { markdownFilename } from "@/types/library";
 import { Box, Button, Flex, IconButton, Spinner, Text, useToast } from "@chakra-ui/react";
 import { ArrowLeft, CircleAlert, Download } from "lucide-react";
 import { useRouter } from "next/router";
+import NextLink from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { downloadAuthenticatedFile, redirectedToLogin } from "@features/chat/services/files";
 import { withAuthHeaders } from "@features/auth/client/authClient";
@@ -59,7 +60,7 @@ function SharedFilePreview({id,drafts}:{id:string;drafts:Map<string,PageDraft>})
   }, [id, endpoint, loadAttempt]);
 
   const backLabel = current?.received ? "返回「与你共享」" : "返回资料空间";
-  const libraryLink = <IconButton as="a" href={current?.received ? "/?" + new URLSearchParams({view:"library",libraryTab:"与你共享"}) : "/?view=library"}
+  const libraryLink = <IconButton as={NextLink} href={current?.received ? "/library?" + new URLSearchParams({libraryTab:"与你共享"}) : "/library"}
     aria-label={backLabel} title={backLabel}
     icon={<ArrowLeft size={18}/>} size="sm" variant="ghost" borderRadius="full" flexShrink={0}/>;
 
@@ -78,7 +79,7 @@ function SharedFilePreview({id,drafts}:{id:string;drafts:Map<string,PageDraft>})
               setResult(undefined);
               setLoadAttempt(value=>value+1);
             }}>重新加载</Button>}
-          <Button as="a" href="/?view=library" size="sm" variant="ghost" borderRadius="full">返回资料空间</Button>
+          <Button as={NextLink} href="/library" size="sm" variant="ghost" borderRadius="full">返回资料空间</Button>
         </Flex>
       </Flex> : <Spinner aria-label="正在读取共享文件"/>}
     </Flex>;

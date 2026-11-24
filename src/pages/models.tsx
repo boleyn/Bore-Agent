@@ -143,13 +143,13 @@ export default function ModelsPage() {
             variant="unstyled"
             index={activeIndex}
             onChange={(index) => {
-              void router.replace(
+              void router.push(
                 {
                   pathname: "/models",
                   query: index === 1 ? { tab: "usage" } : {},
                 },
                 undefined,
-                { shallow: true }
+                { shallow: true, scroll: false }
               );
             }}
           >

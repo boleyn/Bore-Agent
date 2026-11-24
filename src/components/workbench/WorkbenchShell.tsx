@@ -1,5 +1,5 @@
 import { Box, Badge, Button, Divider, Flex, Heading, HStack, Text } from "@chakra-ui/react";
-import { useRouter } from "next/router";
+import NextLink from "next/link";
 import type { ReactNode } from "react";
 
 import { LogoIcon } from "@components/common/Icon";
@@ -26,7 +26,6 @@ export function WorkbenchShell({
   actions,
   children,
 }: WorkbenchShellProps) {
-  const router = useRouter();
   const modelCenterActive = active === "models" || active === "usage";
 
   const navActiveStyles = {
@@ -101,7 +100,8 @@ export function WorkbenchShell({
                     borderRadius="md"
                     {...(active === "home" ? navActiveStyles : navInactiveStyles)}
                     _hover={{ bg: active === "home" ? "primary.50" : "myGray.100" }}
-                    onClick={() => void router.push("/")}
+                    as={NextLink}
+                    href="/"
                   >
                     工作台
                   </Button>
@@ -111,7 +111,8 @@ export function WorkbenchShell({
                     borderRadius="md"
                     {...(modelCenterActive ? navActiveStyles : navInactiveStyles)}
                     _hover={{ bg: modelCenterActive ? "primary.50" : "myGray.100" }}
-                    onClick={() => void router.push("/models")}
+                    as={NextLink}
+                    href="/models"
                   >
                     模型中心
                   </Button>

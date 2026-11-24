@@ -543,7 +543,6 @@ const ChatPanel = ({
   completionsStream = true,
   completionsExtraBody,
   hideSkillsManager = false,
-  autoCreateInitialConversation = true,
   defaultHeaderTitle = "代码助手",
   emptyStateTitle,
   emptyStateDescription,
@@ -558,7 +557,6 @@ const ChatPanel = ({
   onOpenWorkspaceFile,
   externalActiveConversationId,
   externalConversationRevision,
-  externalNewConversationSignal,
   onConversationsChanged,
   hideHeader = false,
   customHeader,
@@ -575,7 +573,6 @@ const ChatPanel = ({
   completionsStream?: boolean;
   completionsExtraBody?: Record<string, unknown>;
   hideSkillsManager?: boolean;
-  autoCreateInitialConversation?: boolean;
   defaultHeaderTitle?: string;
   emptyStateTitle?: string;
   emptyStateDescription?: string;
@@ -590,7 +587,6 @@ const ChatPanel = ({
   onOpenWorkspaceFile?: (filePath: string, version?: string) => boolean;
   externalActiveConversationId?: string;
   externalConversationRevision?: string;
-  externalNewConversationSignal?: number;
   onConversationsChanged?: () => void;
   hideHeader?: boolean;
   customHeader?: ReactNode;
@@ -605,32 +601,16 @@ const ChatPanel = ({
     activeConversation,
     isLoadingConversation,
     isInitialized,
-    createNewConversation,
+    selectConversation,
+    startNewConversation,
     ensureConversation,
     loadConversation,
     deleteConversation,
     deleteAllConversations,
     updateConversationTitle,
-  } = useConversations(token, router, { autoCreateInitialConversation });
-
-  const lastExternalConvIdRef = useRef<string | undefined>(undefined);
-  useEffect(() => {
-    if (!isInitialized || !externalActiveConversationId) return;
-    if (externalActiveConversationId === activeConversation?.id) return;
-    if (lastExternalConvIdRef.current === externalActiveConversationId) return;
-    lastExternalConvIdRef.current = externalActiveConversationId;
-    void loadConversation(externalActiveConversationId);
-  }, [activeConversation?.id, externalActiveConversationId, isInitialized, loadConversation]);
-
-  const lastNewConvSignalRef = useRef(0);
-  useEffect(() => {
-    if (!isInitialized || !externalNewConversationSignal) return;
-    if (externalNewConversationSignal === lastNewConvSignalRef.current) return;
-    lastNewConvSignalRef.current = externalNewConversationSignal;
-    void createNewConversation().then(() => {
-      onConversationsChanged?.();
-    });
-  }, [createNewConversation, externalNewConversationSignal, isInitialized, onConversationsChanged]);
+  } = useConversations(token, router, {
+    externalConversationId: externalActiveConversationId,
+  });
 
   const conversationsSignature = conversations.map((c) => `${c.id}:${c.title}:${c.updatedAt}`).join("|");
   const prevConversationsSigRef = useRef("");
@@ -2391,9 +2371,9 @@ const ChatPanel = ({
       onDeleteConversation: (id: string) => void deleteConversation(id),
       onNewConversation: () => {
         setContextUsageSnapshot(null);
-        void createNewConversation();
+        startNewConversation();
       },
-      onSelectConversation: (id: string) => void loadConversation(id),
+      onSelectConversation: selectConversation,
       activeConversationTitle,
       scrollRef,
       onScroll: (event: { currentTarget: { scrollHeight: number; scrollTop: number; clientHeight: number } }) => {
@@ -2478,7 +2458,8 @@ const ChatPanel = ({
       deleteAllConversations,
       deleteConversation,
       setContextUsageSnapshot,
-      createNewConversation,
+      selectConversation,
+      startNewConversation,
       loadConversation,
       activeConversationTitle,
       scrollRef,

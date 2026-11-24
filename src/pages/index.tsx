@@ -3,6 +3,7 @@ import { getMongoDb } from "@server/db/mongo";
 import { getShareLink } from "@server/shares/shareStorage";
 import { getSiteSettings } from "@server/library/sites";
 import { sitePreviewPath } from "@/types/library";
+import { getWorkspaceReturnPath } from "@shared/workspaceRoute";
 import AgentWorkspace from "../components/AgentWorkspace";
 import { getAuthUserFromRequest } from "@server/auth/ssr";
 
@@ -34,7 +35,7 @@ export const getServerSideProps: GetServerSideProps = async (context) => {
   if (!authUser) {
     return {
       redirect: {
-        destination: `/login?lastRoute=${encodeURIComponent(context.resolvedUrl)}`,
+        destination: `/login?lastRoute=${encodeURIComponent(getWorkspaceReturnPath(context.resolvedUrl, context.query))}`,
         permanent: false,
       },
     };

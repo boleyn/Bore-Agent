@@ -4,10 +4,11 @@ import {
   useContext,
   useEffect,
   useState,
+  useRef,
   type ReactNode,
 } from "react";
-import { useRouter } from "next/router";
-import { clearAuthToken, withAuthHeaders } from "@features/auth/client/authClient";
+import { useToast } from "@chakra-ui/react";
+import { clearAuthToken, getAuthToken, withAuthHeaders } from "@features/auth/client/authClient";
 import type { AuthUser } from "../types/auth";
 
 type AuthContextValue = {
@@ -20,44 +21,87 @@ type AuthContextValue = {
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const router = useRouter();
+  const toast = useToast();
+  const sessionRequest = useRef<AbortController>();
+  const logoutPending = useRef(false);
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
 
   const loadUser = useCallback(async () => {
+    if (logoutPending.current) return;
+    sessionRequest.current?.abort();
+    const controller = new AbortController();
+    sessionRequest.current = controller;
+    const token = getAuthToken();
     try {
-      const response = await fetch("/api/auth/me", { headers: withAuthHeaders() });
+      const response = await fetch("/api/auth/me", {
+        headers: withAuthHeaders(),
+        signal: controller.signal,
+        cache: "no-store",
+      });
       if (!response.ok) {
-        setUser(null);
+        if (!controller.signal.aborted) {
+          if (response.status === 401 && getAuthToken() === token) clearAuthToken();
+          setUser(null);
+        }
         return;
       }
       const data = await response.json();
-      setUser(data.user ?? data);
+      if (!controller.signal.aborted) setUser(data.user ?? data);
     } catch {
-      setUser(null);
+      if (!controller.signal.aborted) setUser(null);
     } finally {
-      setLoading(false);
+      if (!controller.signal.aborted) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    loadUser();
+    let mounted = true;
+    queueMicrotask(() => { if (mounted) void loadUser(); });
+    const syncSession = (event: StorageEvent) => {
+      if (event.key !== "authToken" && event.key !== null) return;
+      if (getAuthToken()) {
+        void loadUser();
+      } else {
+        sessionRequest.current?.abort();
+        setUser(null);
+        setLoading(false);
+      }
+    };
+    const restoreSession = (event: PageTransitionEvent) => {
+      if (!event.persisted) return;
+      setLoading(true);
+      void loadUser();
+    };
+    window.addEventListener("storage", syncSession);
+    window.addEventListener("pageshow", restoreSession);
+    return () => {
+      mounted = false;
+      sessionRequest.current?.abort();
+      window.removeEventListener("storage", syncSession);
+      window.removeEventListener("pageshow", restoreSession);
+    };
   }, [loadUser]);
 
   const logout = useCallback(async () => {
+    if (logoutPending.current) return;
+    logoutPending.current = true;
     try {
-      await fetch("/api/auth/logout", { method: "POST" });
-    } catch {
-      // ignore
-    } finally {
+      const response = await fetch("/api/auth/logout", {
+        method: "POST",
+        headers: withAuthHeaders(),
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!response.ok) throw new Error("退出登录失败");
+      sessionRequest.current?.abort();
       clearAuthToken();
-      if (typeof window !== "undefined") {
-        window.location.replace("/login");
-        return;
-      }
-      router.replace("/login");
+      window.location.replace("/login");
+    } catch {
+      toast({ title: "退出登录失败，请重试", status: "error" });
+    } finally {
+      logoutPending.current = false;
     }
-  }, [router]);
+  }, [toast]);
 
   const value: AuthContextValue = { user, loading, loadUser, logout };
 
