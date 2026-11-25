@@ -45,6 +45,7 @@ import {
   HardDrive,
   Home,
   LayoutGrid,
+  MonitorSmartphone,
   Library,
   Laptop,
   MessageSquare,
@@ -72,6 +73,7 @@ import ProjectsDirectoryView from "./agent-workspace/ProjectsDirectoryView";
 import type { Schedule } from "@/shared/schedules/types";
 import SchedulesView from "./agent-workspace/SchedulesView";
 import CustomizeView from "./agent-workspace/CustomizeView";
+import DevicesDirectoryView from "./agent-workspace/DevicesDirectoryView";
 import { ChatGptPluginsRailIcon } from "./customize/CustomizeIcons";
 import WorkspaceSidebar, {
   SIDEBAR_DEFAULT_WIDTH,
@@ -919,26 +921,26 @@ export default function AgentWorkspace({
         borderRight="1px solid"
         borderColor="stroke.light"
       >
-        <VStack spacing={1.5}>
-          <Tooltip label={activeNav === "chat" ? (sidebarOpen ? "收起侧边栏" : "展开侧边栏") : "返回工作区"} placement="right">
+        <VStack spacing={2.5}>
+          <Tooltip label="主页" placement="right">
             <IconButton
               aria-label="主页"
-              icon={<Home size={17} />}
-              size="sm"
+              icon={<Home size={20} />}
+              size="md"
               variant="ghost"
               color={activeNav === "chat" ? "ink.primary" : "ink.secondary"}
               bg={activeNav === "chat" ? "surface.active" : "transparent"}
               onClick={() => {
                 if (activeNav !== "chat") setActiveNav("chat");
-                else setSidebarOpen((v) => !v);
+                if (!sidebarOpen) setSidebarOpen(true);
               }}
             />
           </Tooltip>
           <Tooltip label="新聊天" placement="right">
             <IconButton
               aria-label="新聊天"
-              icon={<SquarePen size={17} />}
-              size="sm"
+              icon={<SquarePen size={20} />}
+              size="md"
               variant="ghost"
               color="ink.secondary"
               onClick={() => {
@@ -951,8 +953,8 @@ export default function AgentWorkspace({
             <IconButton
               ref={libraryNavButton}
               aria-label="资料空间"
-              icon={<Library size={17} />}
-              size="sm"
+              icon={<Library size={20} />}
+              size="md"
               variant="ghost"
               color={activeNav === "library" ? "ink.primary" : "ink.secondary"}
               bg={activeNav === "library" ? "surface.active" : "transparent"}
@@ -962,8 +964,8 @@ export default function AgentWorkspace({
           <Tooltip label="项目" placement="right">
             <IconButton
               aria-label="项目列表"
-              icon={<Folder size={17} />}
-              size="sm"
+              icon={<Folder size={20} />}
+              size="md"
               variant="ghost"
               color={activeNav === "projects" ? "ink.primary" : "ink.secondary"}
               bg={activeNav === "projects" ? "surface.active" : "transparent"}
@@ -973,8 +975,8 @@ export default function AgentWorkspace({
           <Tooltip label="定时任务" placement="right">
             <IconButton
               aria-label="定时任务"
-              icon={<Clock size={17} />}
-              size="sm"
+              icon={<Clock size={20} />}
+              size="md"
               variant="ghost"
               color={activeNav === "schedules" ? "ink.primary" : "ink.secondary"}
               bg={activeNav === "schedules" ? "surface.active" : "transparent"}
@@ -984,8 +986,8 @@ export default function AgentWorkspace({
           <Tooltip label="插件" placement="right">
             <IconButton
               aria-label="插件"
-              icon={<ChatGptPluginsRailIcon size={18} />}
-              size="sm"
+              icon={<ChatGptPluginsRailIcon size={21} />}
+              size="md"
               variant="ghost"
               color={activeNav === "plugins" || activeNav === "skills" ? "ink.primary" : "ink.secondary"}
               bg={activeNav === "plugins" || activeNav === "skills" ? "surface.active" : "transparent"}
@@ -993,8 +995,15 @@ export default function AgentWorkspace({
             />
           </Tooltip>
           <Tooltip label="我的设备" placement="right">
-            <IconButton aria-label="我的设备" icon={<LayoutGrid size={17} />} size="sm"
-              variant="ghost" color="ink.secondary" onClick={devicesModal.onOpen} />
+            <IconButton
+              aria-label="我的设备"
+              icon={<MonitorSmartphone size={20} />}
+              size="md"
+              variant="ghost"
+              color={activeNav === "devices" ? "ink.primary" : "ink.secondary"}
+              bg={activeNav === "devices" ? "surface.active" : "transparent"}
+              onClick={() => setActiveNav("devices")}
+            />
           </Tooltip>
         </VStack>
 
@@ -1076,6 +1085,8 @@ export default function AgentWorkspace({
           }}
         />
       )}
+      {activeNav === "devices" && <DevicesDirectoryView />}
+
       {(activeNav === "plugins" || activeNav === "skills") && (
         <CustomizeView
           mode={activeNav}

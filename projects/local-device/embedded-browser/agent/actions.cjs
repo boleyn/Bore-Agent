@@ -322,26 +322,34 @@ function createEngine({ tabs, hooks = {} }) {
         if (!native.ok) throw agentError(native.reason, native.missing ? '找不到选项 ' + native.missing.join(', ') + '，可选：' + (native.options || []).join(' | ') : '该下拉不支持多选');
         return { selected: native.selected };
       }
-      const info = await callOn(tab, objectId, scripts.describeElement);
-      const canType = info && ((info.tag === 'input' && !info.readOnly) || info.editable);
+      let info = await callOn(tab, objectId, scripts.describeElement);
       const chosen = [];
       for (let i = 0; i < values.length; i++) {
         const value = values[i];
-        if (i === 0) {
+        if (i === 0 && !info?.selectExpanded) {
           await clickObject(tab, objectId, {}, ref);
-          await sleep(120);
+          await sleep(160);
+          info = await callOn(tab, objectId, scripts.describeElement).catch(() => info);
         }
-        if (i === 0 || canType) {
-          const focusState = await callOn(tab, objectId, scripts.focusAndClear, [true]).catch(() => null);
-          if (focusState?.editable) {
-            await pressKey(tab, 'Backspace').catch(() => {});
-            await cdpFor(tab)('Input.insertText', { text: value });
-          }
+        const searchStartAt = Date.now();
+        let typedSearch = false;
+        const focusState = await callOn(tab, objectId, scripts.prepareSelectSearch).catch(() => null);
+        if (focusState?.editable) {
+          await cdpFor(tab)('Input.insertText', { text: value });
+          await callOn(tab, objectId, scripts.finalizeSelectSearch, [value]).catch(() => {});
+          typedSearch = true;
+          await sleep(220);
         }
         let clicked = false;
-        for (let attempt = 0; attempt < 12 && !clicked; attempt++) {
-          await sleep(attempt ? 250 : 300);
+        for (let attempt = 0; attempt < 14 && !clicked; attempt++) {
+          await sleep(attempt ? 280 : 220);
           clicked = await chooseOptionByText(tab, objectId, value);
+          if (!clicked && typedSearch && attempt === 3) {
+            const hasSearchReq = tab.network.some((item) => item.timestamp >= searchStartAt && ['XHR', 'Fetch'].includes(item.type));
+            if (!hasSearchReq) {
+              await pressKey(tab, 'Enter').catch(() => {});
+            }
+          }
         }
         if (!clicked) {
           const doc = await documentObject(tab).catch(() => null);
@@ -410,6 +418,12 @@ function createEngine({ tabs, hooks = {} }) {
     try {
       hooks.pointer?.(tab, { action: 'edit' });
       const info = await callOn(tab, objectId, scripts.describeElement);
+      if (info?.isSelectWidget || info?.tag === 'select' || info?.role === 'combobox' || info?.hasPopup === 'listbox') {
+        throw agentError('not_editable', ref + ' 是下拉选择器，请直接调用 select_option（会自动展开并触发远程搜索，无需提前点击或调用 fill）');
+      }
+      if (info?.readOnly) {
+        throw agentError('not_editable', ref + ' 是只读输入框（若为下拉选择器请用 select_option）');
+      }
       if (info?.editable) {
         // 富文本编辑器（Quill/ProseMirror/Slate 等）走真实键盘管线，确保内部模型与 ql-blank 等状态同步。
         await clickObject(tab, objectId, {}, ref).catch(() => {});
@@ -1018,6 +1032,31 @@ function createEngine({ tabs, hooks = {} }) {
     if (nothing) {
       effect.none = true;
       effect.hint = '动作后页面无可观测变化（无导航、无请求、无 DOM 变化、无提示），可能未生效或该控件无响应';
+    } else {
+      const uiTexts = (result.uiEvents || []).map((item) => item.text).filter(Boolean);
+      const errRe = /失败|错误|拒绝|未匹配|不存在|异常|禁止|超时|无效|不可|校验|请先|cannot|failed|error|invalid|denied|rejected/i;
+      const okRe = /成功|已创建|已提交|已完成|已保存|通过|created|submitted|succeeded|success/i;
+      const errUi = uiTexts.find((t) => errRe.test(t));
+      const okUi = uiTexts.find((t) => okRe.test(t));
+      const hasFailedReq = Array.isArray(result.failedRequests) && result.failedRequests.length > 0;
+      const nonSubmitRe = /(?:^|[/?_.-])(client-event|telemetry|track|analytics|metrics|heartbeat|log|logs|query|search|list|page|detail|info|init|config|dict|enum|options|check|validate|preview)(?:[/?_.-]|$)/i;
+      const mutationReqs = requests.filter((r) => {
+        const method = (r.method || '').toUpperCase();
+        if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) return false;
+        return !nonSubmitRe.test(r.url || '');
+      });
+
+      if (hasFailedReq || errUi) {
+        const failDetail = errUi || (result.failedRequests[0]?.responseBody || result.failedRequests[0]?.error || `HTTP ${result.failedRequests[0]?.status}`);
+        effect.outcome = { status: 'rejected', message: failDetail };
+      } else if (okUi || effect.navigated) {
+        effect.outcome = { status: 'succeeded', message: okUi || `页面已跳转至 ${effect.navigated}` };
+      } else if (mutationReqs.length > 0) {
+        effect.outcome = {
+          status: 'unknown',
+          message: `已发出写请求（${clipText(mutationReqs[mutationReqs.length - 1].url || '', 120)}），但未捕获到明确业务提示，请先核验列表状态再决定是否重试`
+        };
+      }
     }
     return effect;
   }

@@ -62,7 +62,7 @@ flowchart LR
 | --- | --- | --- |
 | **Agent 网关与前端页面（`bore-agent`）** | Next.js 全栈服务（Node.js 24 + Bun） | 提供对话页面、模型管理、项目管理、Agent 网关 API 与 Bore Agent 核心运行循环（`src/agent/`）。 |
 | **远端沙盒（`agent-sandbox`）** | Docker 容器服务（`projects/agent-sandbox/`） | 基于容器与 HTTP Exec Server（`exec-server.ts`）提供隔离的命令执行与文件同步环境，支持工作区快照与 S3 持久化。 |
-| **本地电脑客户端（`local-device`）** | Go 桌面托盘应用（`projects/local-device/`） | 支持 macOS / Windows，主动通过 WS/WSS 连接工作台，将个人电脑安全接入，每次执行需在本机弹窗授权并选择工作目录。 |
+| **本地电脑客户端（`local-device`）** | Go 桌面托盘应用 + 内置 Electron 浏览器（`projects/local-device/`） | 支持 macOS / Windows，主动通过 WS/WSS 连接工作台，将个人电脑安全接入，支持内置浏览器自动化、授权管理同窗与本机目录授权。 |
 | **本机目录连接器（`agent-connector`）** | 轻量服务端（`projects/agent-connector/`） | 将本机指定目录直接挂载为智能体工作区。 |
 | **外部基础依赖** | MongoDB + S3 / MinIO | MongoDB 存储账号、项目、会话与消息；S3 / MinIO 存储对话附件与沙盒工作区快照。 |
 
@@ -81,7 +81,22 @@ flowchart LR
 > - **最低配置（个人开发 / 轻量试用）**：2 核 CPU、4 GB 内存、40 GB SSD（需同时运行 Web、沙盒、MongoDB 与 MinIO）。
 > - **推荐配置（团队日常 / 多项目并发）**：4 核 CPU、8 GB+ 内存、80 GB+ SSD；若需高频并发执行代码构建或数据分析任务，建议 8 核 16 GB+。
 
-- **会话与模型**：按项目管理会话和输出文件，配置模型连接、查看用量，也可以在会话中创建定时任务。
+- **会话与模型**：按项目管理会话和输出文件，配置模型连接、查看用量，也可以在会话中创建定时任务。未显式配置 `maxContext` 时，`gpt-6` 系列默认按 `1,050,000` tokens、`gemini` / `[1m]` 按 `1,000,000` tokens 计算上下文窗口与压缩预算。
+
+## 设备与基础设施管理（`/devices`）
+
+左侧导航栏「我的设备」提供独立的全屏资源管理页（`src/components/agent-workspace/DevicesDirectoryView.tsx`），对齐「资料空间」的次级侧边栏与列表/网格双视图交互，统一纳管四类执行与连接资源：
+
+- **云服务器（内置沙盒主机）**：实时展示云端执行环境状态（分配中 / 已就绪 / 已休眠 / 已停止）与实例 ID。
+- **本地设备（伯仁连接器）**：支持通过 `127.0.0.1:13005` 配对桥一键连接本机或生成授权链接邀请其他电脑，支持修改备注与二次确认移除设备（`POST /api/core/localDevice/manage`）。macOS 开发包默认隔离状态目录（`ai.studio.local-device`）与密钥存储。
+- **服务器（SSH）与数据库**：支持统一配置远程 SSH 主机（密码 / PEM 私钥）及 PostgreSQL、MySQL、MongoDB、Redis 连接（`src/pages/api/core/resources/manage.ts`、`src/server/resources/store.ts`）。凭据通过 AES-256-GCM 加密持久化于 MongoDB，支持一键执行 SSH Banner 握手与端口连通性检测。
+
+## 本地浏览器自动化（`embedded-browser`）
+
+伯仁连接器内置基于 Electron 的受控浏览器（`projects/local-device/embedded-browser/`），与授权管理融合为同一桌面窗口，支持智能体可见操作与人工随时接管：
+
+- **精准控件识别与远程搜索下拉（`agent/actions.cjs`、`agent/page-scripts.cjs`）**：自动识别组件库下拉包装器（Element UI / Ant Design 等），对只读或下拉控件调用 `fill` 时主动拦截并引导使用 `select_option`；`select_option` 支持展开态检测、弹层内远程搜索框定位、大小写不敏感匹配以及选中值读回。
+- **业务提交回执（`effect.outcome`）**：在动作完成后综合瞬时提示（toast / alert）、4xx/5xx 失败响应、页面跳转与真实业务写请求（过滤 `client-event`、查询与埋点请求），明确返回 `succeeded`、`rejected` 或 `unknown`，降低误判与重复提交风险。
 
 ## 选中引用与侧边聊天
 

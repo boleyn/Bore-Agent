@@ -1,6 +1,6 @@
 import type { ParsedUrlQuery } from "querystring";
 
-export type WorkspaceView = "chat" | "library" | "projects" | "schedules" | "plugins" | "skills";
+export type WorkspaceView = "chat" | "library" | "projects" | "schedules" | "plugins" | "skills" | "devices";
 
 export type ParsedWorkspaceRoute = {
   view: WorkspaceView;
@@ -68,6 +68,9 @@ export function parseWorkspaceRoute(
   if (pathname === "/skills") {
     return { view: "skills" };
   }
+  if (pathname === "/devices") {
+    return { view: "devices" };
+  }
   if (pathname.startsWith("/c/")) {
     const rawId = pathname.slice(3).split("/")[0];
     if (rawId) {
@@ -82,7 +85,8 @@ export function parseWorkspaceRoute(
     queryView === "projects" ||
     queryView === "schedules" ||
     queryView === "plugins" ||
-    queryView === "skills"
+    queryView === "skills" ||
+    queryView === "devices"
   ) {
     return { view: queryView };
   }
@@ -105,7 +109,8 @@ export function getWorkspaceReturnPath(resolvedUrl: string, query: ParsedUrlQuer
     view === "projects" ||
     view === "schedules" ||
     view === "plugins" ||
-    view === "skills"
+    view === "skills" ||
+    view === "devices"
   ) {
     return `/${view}${search}`;
   }
@@ -181,6 +186,9 @@ export function buildWorkspaceLocation(
   }
   if (view === "skills") {
     return { href, as: `/skills${serializeQuery(cleanExtra)}` };
+  }
+  if (view === "devices") {
+    return { href, as: `/devices${serializeQuery(cleanExtra)}` };
   }
   if (conversationId) {
     return {

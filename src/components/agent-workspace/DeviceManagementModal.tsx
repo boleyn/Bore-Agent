@@ -7,6 +7,7 @@ import {
   IconButton,
   Menu, MenuButton, MenuList, MenuItem,
   Input,
+  Skeleton,
   Text,
   useToast,
   VStack,
@@ -19,6 +20,8 @@ import {
   Plus,
   Link2,
   Download,
+  MoreHorizontal,
+  Trash2,
 } from "lucide-react";
 import { withAuthHeaders } from "@features/auth/client/authClient";
 
@@ -43,6 +46,8 @@ export default function DeviceManagementModal({ isOpen, onClose }: DeviceManagem
   const [editing, setEditing] = useState<string | null>(null);
   const [remark, setRemark] = useState("");
   const [savingRemark, setSavingRemark] = useState(false);
+  const [revokeTarget, setRevokeTarget] = useState<PairedDeviceItem | null>(null);
+  const [revokingId, setRevokingId] = useState<string | null>(null);
   const saveRemark = async (device: PairedDeviceItem) => {
     setSavingRemark(true);
     try {
@@ -55,6 +60,25 @@ export default function DeviceManagementModal({ isOpen, onClose }: DeviceManagem
       await loadDevices(true);
     } catch { toast({ title: "备注保存失败，请重试", status: "error" }); }
     finally { setSavingRemark(false); }
+  };
+  const revokeDeviceItem = async (device: PairedDeviceItem) => {
+    setRevokingId(device.deviceId);
+    try {
+      const response = await fetch("/api/core/localDevice/manage", {
+        method: "POST",
+        headers: withAuthHeaders({ "content-type": "application/json" }),
+        body: JSON.stringify({ action: "revoke", deviceId: device.deviceId }),
+      });
+      if (!response.ok) throw new Error();
+      setRevokeTarget(null);
+      if (editing === device.deviceId) setEditing(null);
+      toast({ title: `已移除「${deviceDisplayName(device)}」`, status: "success" });
+      await loadDevices(true);
+    } catch {
+      toast({ title: "移除设备失败，请重试", status: "error" });
+    } finally {
+      setRevokingId(null);
+    }
   };
   const [pairMessage, setPairMessage] = useState("");
   const [inviteLink, setInviteLink] = useState("");
@@ -80,6 +104,7 @@ export default function DeviceManagementModal({ isOpen, onClose }: DeviceManagem
   useEffect(() => {
     if (!isOpen) return;
     setEditing(null);
+    setRevokeTarget(null);
     setPairMessage("");
     setInviteLink("");
     void loadDevices();
@@ -230,10 +255,10 @@ export default function DeviceManagementModal({ isOpen, onClose }: DeviceManagem
 
   return (
     <AppDialog isOpen={isOpen} onClose={onClose} size="md" title="我的设备" footer={footer}>
-      <VStack align="stretch" spacing={2}>
+      <VStack align="stretch" spacing={2} minW={{ base: "100%", sm: "380px" }}>
         {pairMessage && <Text role="status" color="ink.secondary" fontSize="sm">{pairMessage}</Text>}
         {inviteLink && (
-          <VStack align="stretch" spacing={2}>
+          <VStack align="stretch" spacing={2} minW={{ base: "100%", sm: "380px" }}>
             <Input size="sm" value={inviteLink} isReadOnly onClick={(e) => e.currentTarget.select()} aria-label="邀请链接" />
             <Button size="sm" variant="outline" onClick={() => void copyInviteLink()}>复制邀请链接</Button>
           </VStack>
@@ -242,7 +267,18 @@ export default function DeviceManagementModal({ isOpen, onClose }: DeviceManagem
           <Text color="ink.secondary" fontSize="sm">连接其他电脑时，请从两台电脑都能访问的平台地址打开工作台并创建邀请。</Text>
         )}
         {listError ? <Text role="alert" fontSize="sm">{listError}</Text> : loadingDevices ? (
-          <Text fontSize="sm" color="ink.muted">正在刷新设备…</Text>
+          <VStack align="stretch" spacing={2}>
+            {[0, 1].map((idx) => (
+              <HStack key={idx} px={3} py={2} borderRadius="10px" bg="gray.50" spacing={3}>
+                <Skeleton boxSize="20px" borderRadius="4px" flexShrink={0} />
+                <VStack align="start" spacing={1.5} flex={1}>
+                  <Skeleton h="14px" w="140px" borderRadius="4px" />
+                  <Skeleton h="10px" w="72px" borderRadius="4px" />
+                </VStack>
+                <Skeleton boxSize="24px" borderRadius="6px" flexShrink={0} />
+              </HStack>
+            ))}
+          </VStack>
         ) : devices.length === 0 ? (
           <Text fontSize="sm" color="ink.secondary">还没有连接电脑。</Text>
         ) : devices.map((device) => {
@@ -255,8 +291,42 @@ export default function DeviceManagementModal({ isOpen, onClose }: DeviceManagem
                   <Text fontSize="sm" noOfLines={1}>{name}</Text>
                   <Text fontSize="xs" color="ink.secondary">{device.online ? "在线" : "离线"}{device.browserSupported && " · 支持本地浏览器"}</Text>
                 </Box>
-                <IconButton aria-label={`修改${name}的备注`} size="sm" variant="ghost" icon={<Pencil size={15} />}
-                  onClick={() => { setEditing(device.deviceId); setRemark(device.remark || ""); }} />
+                <Menu placement="bottom-end" isLazy>
+                  <MenuButton
+                    as={IconButton}
+                    aria-label={`${name}更多操作`}
+                    size="sm"
+                    variant="ghost"
+                    borderRadius="8px"
+                    color="ink.secondary"
+                    _hover={{ bg: "blackAlpha.100", color: "ink.primary" }}
+                    icon={<MoreHorizontal size={16} />}
+                  />
+                  <MenuList minW="132px" py={1}>
+                    <MenuItem
+                      icon={<Pencil size={14} />}
+                      fontSize="sm"
+                      onClick={() => {
+                        setRevokeTarget(null);
+                        setEditing(device.deviceId);
+                        setRemark(device.remark || "");
+                      }}
+                    >
+                      修改备注
+                    </MenuItem>
+                    <MenuItem
+                      icon={<Trash2 size={14} />}
+                      fontSize="sm"
+                      color="red.500"
+                      onClick={() => {
+                        setEditing(null);
+                        setRevokeTarget(device);
+                      }}
+                    >
+                      移除设备
+                    </MenuItem>
+                  </MenuList>
+                </Menu>
               </HStack>
               {editing === device.deviceId && <HStack mt={2}>
                 <Input size="sm" aria-label="电脑备注" placeholder="例如：办公 Mac" maxLength={32} autoFocus
@@ -271,6 +341,40 @@ export default function DeviceManagementModal({ isOpen, onClose }: DeviceManagem
           );
         })}
       </VStack>
+      <AppDialog
+        isOpen={Boolean(revokeTarget)}
+        onClose={() => {
+          if (!revokingId) setRevokeTarget(null);
+        }}
+        size="sm"
+        title="移除设备"
+        footer={
+          <HStack spacing={2} justify="flex-end" w="full">
+            <Button
+              size="sm"
+              variant="ghost"
+              isDisabled={Boolean(revokingId)}
+              onClick={() => setRevokeTarget(null)}
+            >
+              取消
+            </Button>
+            <Button
+              size="sm"
+              colorScheme="red"
+              isLoading={Boolean(revokingId)}
+              onClick={() => {
+                if (revokeTarget) void revokeDeviceItem(revokeTarget);
+              }}
+            >
+              确认移除
+            </Button>
+          </HStack>
+        }
+      >
+        <Text fontSize="sm" color="ink.secondary">
+          确定移除「{revokeTarget ? deviceDisplayName(revokeTarget) : ""}」？移除后如需使用需重新配对。
+        </Text>
+      </AppDialog>
     </AppDialog>
   );
 }

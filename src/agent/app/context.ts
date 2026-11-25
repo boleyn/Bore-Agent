@@ -5,10 +5,8 @@ export function getContextWindowForModel(model: string): number {
   if (/\[1m\]/i.test(trimmed)) return 1_000_000;
 
   const lower = trimmed.toLowerCase();
+  if (lower.includes("gpt-6")) return 1_050_000;
   if (lower.includes("gemini")) return 1_000_000;
-  if (lower.includes("gpt-4o") || lower.includes("gpt-4.1") || lower.includes("o3") || lower.includes("o4")) {
-    return 128_000;
-  }
   return MODEL_CONTEXT_WINDOW_DEFAULT;
 }
 

@@ -1,9 +1,0 @@
-{
-  "mcpServers": {
-    "mcp-gitlab-kb": {
-      "type": "sse",
-      "url": "http://10.21.8.6:8008/sse"
-    }
-  }
-}
-

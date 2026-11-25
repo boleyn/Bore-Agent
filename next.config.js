@@ -15,6 +15,7 @@ const nextConfig = {
       { source: "/schedules", destination: "/?__workspaceView=schedules" },
       { source: "/plugins", destination: "/?__workspaceView=plugins" },
       { source: "/skills", destination: "/?__workspaceView=skills" },
+      { source: "/devices", destination: "/?__workspaceView=devices" },
     ];
   },
   webpack(config, { webpack }) {

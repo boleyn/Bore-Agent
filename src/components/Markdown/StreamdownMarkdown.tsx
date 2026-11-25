@@ -19,6 +19,37 @@ interface StreamdownMarkdownProps {
 
 const STREAMDOWN_PLUGINS = { code };
 
+class MarkdownErrorBoundary extends React.Component<
+  { fallbackText: string; children: React.ReactNode },
+  { hasError: boolean }
+> {
+  constructor(props: { fallbackText: string; children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidUpdate(prevProps: { fallbackText: string }) {
+    if (this.state.hasError && prevProps.fallbackText !== this.props.fallbackText) {
+      this.setState({ hasError: false });
+    }
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <Box whiteSpace="pre-wrap" wordBreak="break-word" fontSize="15px" lineHeight="1.75">
+          {this.props.fallbackText}
+        </Box>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 function WorkspaceArtifactImage({ token, path, version, alt }: WorkspaceImage & { alt: string }) {
   const [src, setSrc] = React.useState("");
   const [failed, setFailed] = React.useState(false);
@@ -64,9 +95,10 @@ const StreamdownMarkdown: React.FC<StreamdownMarkdownProps> = ({
 }) => {
   const safeSource = typeof source === "string" ? source : String(source ?? "");
   const rehypePlugins = useMemo(() => resolveWorkspaceImage || resolveWorkspaceFile ? [
-    defaultRehypePlugins.raw,
+    defaultRehypePlugins?.raw,
     () => (tree: Root) => {
       visit(tree, "element", (node) => {
+        if (!node.properties) return;
         const href = node.properties.href;
         if (node.tagName === "a" && typeof href === "string" && href.startsWith("sandbox:/")) {
           const path = href.slice("sandbox:".length);
@@ -78,9 +110,10 @@ const StreamdownMarkdown: React.FC<StreamdownMarkdownProps> = ({
         if (resolveWorkspaceImage?.(path)) node.properties.src = path;
       });
     },
-    defaultRehypePlugins.sanitize,
+    defaultRehypePlugins?.sanitize,
     () => (tree: Root) => {
       visit(tree, "element", (node) => {
+        if (!node.properties) return;
         const { src, alt } = node.properties;
         if (node.tagName !== "img" || typeof src !== "string" || !resolveWorkspaceImage?.(src)) return;
         // Route known reply artifacts through the authenticated renderer before URL hardening.
@@ -88,8 +121,8 @@ const StreamdownMarkdown: React.FC<StreamdownMarkdownProps> = ({
         node.properties = { artifactSource: src, alt };
       });
     },
-    defaultRehypePlugins.harden,
-  ] : undefined, [resolveWorkspaceFile, resolveWorkspaceImage]);
+    defaultRehypePlugins?.harden,
+  ].filter((p): p is NonNullable<typeof p> => Boolean(p)) : undefined, [resolveWorkspaceFile, resolveWorkspaceImage]);
   const components = useMemo(
     () => ({
       "workspace-artifact-image": ({ artifactSource, alt }: Record<string, unknown>) => {
@@ -159,12 +192,12 @@ const StreamdownMarkdown: React.FC<StreamdownMarkdownProps> = ({
           fontWeight: 500,
           color: "#3f3f46",
         },
-        "& [data-streamdown='code-block-header'] > :first-child": {
+        "& [data-streamdown='code-block-header'] > :first-of-type": {
           display: "inline-flex",
           alignItems: "center",
           gap: "6px",
         },
-        "& [data-streamdown='code-block-header'] > :first-child::before": {
+        "& [data-streamdown='code-block-header'] > :first-of-type::before": {
           content: '"</>"',
           fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
           fontSize: "11.5px",
@@ -218,24 +251,26 @@ const StreamdownMarkdown: React.FC<StreamdownMarkdownProps> = ({
         },
       }}
     >
-      <Streamdown
-        className="w-full"
-        plugins={STREAMDOWN_PLUGINS}
-        rehypePlugins={rehypePlugins}
-        shikiTheme={["github-light", "github-light"]}
-        isAnimating={showAnimation}
-        mode={showAnimation ? "streaming" : "static"}
-        lineNumbers={false}
-        tableMaxHeight={0}
-        controls={{
-          code: { copy: true, download: false },
-          table: { copy: true, download: true, fullscreen: false },
-          mermaid: false,
-        }}
-        components={components}
-      >
-        {safeSource}
-      </Streamdown>
+      <MarkdownErrorBoundary fallbackText={safeSource}>
+        <Streamdown
+          className="w-full"
+          plugins={STREAMDOWN_PLUGINS}
+          rehypePlugins={rehypePlugins}
+          shikiTheme={["github-light", "github-light"]}
+          isAnimating={showAnimation}
+          mode={showAnimation ? "streaming" : "static"}
+          lineNumbers={false}
+          tableMaxHeight={0}
+          controls={{
+            code: { copy: true, download: false },
+            table: { copy: true, download: true, fullscreen: false },
+            mermaid: false,
+          }}
+          components={components}
+        >
+          {safeSource}
+        </Streamdown>
+      </MarkdownErrorBoundary>
     </Box>
   );
 };

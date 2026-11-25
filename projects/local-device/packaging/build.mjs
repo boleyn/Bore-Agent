@@ -188,15 +188,20 @@ export async function build(options) {
       join(dirname(binary), 'connector-dialog')
     ]);
   }
-  const linker = ['-s', '-w', `-X=main.version=${options.version}`];
+  const linker = ['-s', '-w', `-X=main.version=${options.version}`, `-X=main.stateDirName=${bundleId}`];
   if (options.devLoopback) linker.push('-X=main.devLoopback=1');
   linker.push(`-X=fastgpt.local/local-device/internal/desktop.PlatformOrigin=${platformURL}`);
   // Go 的 -ldflags 有自己的引号解析；禁止单引号以避免注入链接参数。
   linker.push(`'-X=fastgpt.local/local-device/internal/desktop.ProductName=${name}'`);
-  if (options.platform === 'darwin')
+  if (options.platform === 'darwin') {
     linker.push(
       `-X=fastgpt.local/local-device/internal/desktop.ProductIconBase64=${(await readFile(trayPath)).toString('base64')}`
     );
+    linker.push(`-X=fastgpt.local/local-device/internal/devicekey.keychainService=${bundleId}`);
+    if (options.devLoopback) {
+      linker.push('-X=fastgpt.local/local-device/internal/devicekey.useFileVault=1');
+    }
+  }
   for (const [browser, variable] of [
     ['chrome', 'ChromeExtensionID'],
     ['edge', 'EdgeExtensionID']

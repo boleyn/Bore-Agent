@@ -65,13 +65,37 @@ const prepareClick = `async function () {
 const describeElement = `function () {
   const el = this.nodeType === 1 ? this : this.parentElement;
   if (!el) return null;
-  const role = el.getAttribute('role') || '';
+  const selectWrap = el.closest && el.closest('.el-select,.el-cascader,.el-autocomplete,.ant-select,.ant-cascader,.ivu-select,.arco-select,.n-select,.t-select,[role=combobox]');
+  const root = selectWrap || el;
+  const editableInner = root.querySelector && root.querySelector('input:not([type=hidden]):not([readonly]):not([disabled]),textarea:not([readonly]):not([disabled])');
+  const anyInner = el.matches('input,textarea,select') ? el : (root.querySelector && root.querySelector('input:not([type=hidden]),textarea,select'));
+  const target = editableInner || anyInner || el;
+  const role = el.getAttribute('role') || target.getAttribute('role') || (selectWrap && selectWrap.getAttribute('role')) || '';
+  const hasPopup = el.getAttribute('aria-haspopup') || target.getAttribute('aria-haspopup') || (selectWrap && selectWrap.getAttribute('aria-haspopup')) || '';
+  const ariaReadOnly = el.getAttribute('aria-readonly') === 'true' || target.getAttribute('aria-readonly') === 'true';
+  const ariaAuto = el.getAttribute('aria-autocomplete') || target.getAttribute('aria-autocomplete') || '';
+  const isSelectWidget = !!selectWrap || role === 'combobox' || hasPopup === 'listbox' || !!ariaAuto;
+  let selectExpanded = false;
+  if (selectWrap) {
+    selectExpanded = selectWrap.getAttribute('aria-expanded') === 'true' ||
+      target.getAttribute('aria-expanded') === 'true' ||
+      selectWrap.classList.contains('ant-select-open') ||
+      selectWrap.classList.contains('ivu-select-visible') ||
+      selectWrap.classList.contains('arco-select-popup-shown') ||
+      !!(selectWrap.querySelector && selectWrap.querySelector('.el-select__caret.is-reverse,.is-focus'));
+  }
   return {
-    tag: el.tagName.toLowerCase(), type: (el.type || '').toLowerCase(), role,
-    editable: el.isContentEditable, multiple: !!el.multiple,
-    hasPopup: el.getAttribute('aria-haspopup') || '',
-    readOnly: !!el.readOnly,
-    checked: typeof el.checked === 'boolean' && (el.type === 'checkbox' || el.type === 'radio') ? el.checked :
+    tag: target.tagName.toLowerCase(),
+    hostTag: el.tagName.toLowerCase(),
+    type: (target.type || '').toLowerCase(),
+    role,
+    editable: el.isContentEditable || target.isContentEditable,
+    multiple: !!target.multiple,
+    hasPopup,
+    isSelectWidget,
+    selectExpanded,
+    readOnly: !!target.readOnly || ariaReadOnly,
+    checked: typeof target.checked === 'boolean' && (target.type === 'checkbox' || target.type === 'radio') ? target.checked :
       (el.getAttribute('aria-checked') === 'true' ? true : el.getAttribute('aria-checked') === 'false' ? false : null)
   };
 }`;
@@ -159,6 +183,7 @@ const selectNative = `function (values) {
  */
 const findOptionByText = `function (text, exclude) {
   const want = text.trim();
+  const wantLower = want.toLowerCase();
   const norm = (s) => (s || '').replace(/\\s+/g, ' ').trim();
   const docs = [document];
   for (const f of document.querySelectorAll('iframe,frame')) { try { if (f.contentDocument) docs.push(f.contentDocument); } catch (_) {} }
@@ -166,6 +191,7 @@ const findOptionByText = `function (text, exclude) {
   const roleSel = '[role=option],[role=menuitem],[role=menuitemradio],[role=menuitemcheckbox],[role=treeitem],[role=gridcell],option,li,dd,td,[class*=option],[class*=item],[class*=node]';
   const popupSel = '[role=listbox],[role=menu],[role=tree],.el-select-dropdown,.el-popper,.el-cascader__dropdown,.el-autocomplete-suggestion,.ant-select-dropdown,[class*=dropdown],[class*=popper],[class*=popup],[class*=cascader],[class*=picker]';
   const navSel = 'nav,[role=navigation],[role=menubar],.el-menu,.ant-menu,.sidebar,.side-menu';
+  const maxLen = Math.max(want.length * 6 + 60, 120);
   let best = null, bestScore = -1;
   for (const doc of docs) {
     const all = doc.querySelectorAll(roleSel + ',span,div,a,label');
@@ -176,11 +202,15 @@ const findOptionByText = `function (text, exclude) {
       const inPopup = !!n.closest(popupSel);
       if (!inPopup && n.closest(navSel)) continue;
       const t = norm(n.innerText);
-      if (!t || t.length > want.length * 3 + 20) continue;
+      if (!t || t.length > maxLen) continue;
+      const tLower = t.toLowerCase();
       const exact = t === want;
-      if (!exact && !t.includes(want)) continue;
+      const exactCI = !exact && tLower === wantLower;
+      const sub = !exact && !exactCI && t.includes(want);
+      const subCI = !exact && !exactCI && !sub && tLower.includes(wantLower);
+      if (!exact && !exactCI && !sub && !subCI) continue;
       if (!visible(n)) continue;
-      let score = (exact ? 1000 : 300) + index / all.length * 100;
+      let score = (exact ? 1000 : exactCI ? 900 : sub ? 350 : 300) + index / all.length * 100;
       if (n.matches(roleSel)) score += 200;
       if (inPopup) score += 500;
       if (n.closest('.el-select-dropdown__item,.ant-select-item-option,[role=option]')) score += 200;
@@ -558,8 +588,16 @@ const readValue = `function () {
   const t = el.matches('input,textarea,select') ? el : (el.querySelector('input:not([type=hidden]),textarea,select') || el);
   if (t.type === 'password') return '***';
   if (t.tagName === 'SELECT') return Array.from(t.selectedOptions).map((o) => o.label).join(', ');
-  if ('value' in t && typeof t.value === 'string') return t.value.slice(0, 500);
-  return (t.innerText || '').slice(0, 500);
+  if ('value' in t && typeof t.value === 'string') {
+    if (t.value) return t.value.slice(0, 500);
+    if (el !== t) {
+      const display = (el.innerText || '').trim();
+      const placeholder = t.getAttribute('placeholder') || '';
+      if (display && display !== placeholder) return display.slice(0, 500);
+    }
+    return '';
+  }
+  return (t.innerText || '').trim().slice(0, 500);
 }`;
 
 /** 文件上传：定位实际的 file input（目标自身、子孙或同一表单/父级内）。 */
@@ -591,8 +629,61 @@ const pageBusy = `function () {
   return '';
 }`;
 
+/** 为下拉选择器定位可输入的远程搜索框（支持组件内搜索框、当前焦点及可见下拉弹层内搜索框）。 */
+const prepareSelectSearch = `function () {
+  const el = this.nodeType === 1 ? this : this.parentElement;
+  const doc = (el && el.ownerDocument) || document;
+  const isEditableInput = (n) => n && n.matches && n.matches('input:not([type=hidden]):not([readonly]):not([disabled]),textarea:not([readonly]):not([disabled])') && !['checkbox','radio','file','button','submit','reset'].includes(n.type);
+  const visible = (n) => (n.checkVisibility ? n.checkVisibility({ checkOpacity: false, checkVisibilityCSS: true }) : n.getClientRects().length) && n.getBoundingClientRect().width > 0;
+  const wrap = (el && el.closest && el.closest('.el-select,.el-cascader,.el-autocomplete,.ant-select,.ant-cascader,.ivu-select,.arco-select,.n-select,.t-select,[role=combobox]')) || el;
+
+  let target = null;
+  if (isEditableInput(el)) target = el;
+  if (!target && wrap && wrap.querySelectorAll) {
+    for (const cand of wrap.querySelectorAll('input,textarea')) {
+      if (isEditableInput(cand)) { target = cand; break; }
+    }
+  }
+  if (!target && isEditableInput(doc.activeElement)) {
+    target = doc.activeElement;
+  }
+  if (!target) {
+    const popupSel = '.el-select-dropdown,.el-popper,.ant-select-dropdown,[role=listbox],[class*=dropdown],[class*=popover],[class*=popper]';
+    const pops = Array.from(doc.querySelectorAll(popupSel)).filter(visible);
+    for (let i = pops.length - 1; i >= 0 && !target; i--) {
+      for (const cand of pops[i].querySelectorAll('input,textarea')) {
+        if (isEditableInput(cand) && visible(cand)) { target = cand; break; }
+      }
+    }
+  }
+  if (!target) return { editable: false };
+  target.focus();
+  const proto = target.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  const setter = Object.getOwnPropertyDescriptor(proto, 'value') && Object.getOwnPropertyDescriptor(proto, 'value').set;
+  if (setter && target.value) {
+    setter.call(target, '');
+    target.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  return { editable: true };
+}`;
+
+/** 确保下拉搜索框的值与输入同步并触发 Vue/React 远程搜索事件。 */
+const finalizeSelectSearch = `function (text) {
+  const doc = (this && this.ownerDocument) || document;
+  const active = doc.activeElement;
+  if (!active || !('value' in active)) return false;
+  const proto = active.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  const setter = Object.getOwnPropertyDescriptor(proto, 'value') && Object.getOwnPropertyDescriptor(proto, 'value').set;
+  if (setter && active.value !== text) {
+    setter.call(active, text);
+  }
+  active.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
+  active.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: text.slice(-1) || 'a' }));
+  return true;
+}`;
+
 module.exports = {
   prepareClick, describeElement, fillElement, selectNative, findOptionByText, listVisibleOptions, extractMarkdown,
-  pageHasText, waitDomQuiet, scrollTo, scrollState, focusAndClear, readValue, findFileInput,
+  pageHasText, waitDomQuiet, scrollTo, scrollState, focusAndClear, prepareSelectSearch, finalizeSelectSearch, readValue, findFileInput,
   readTransientEvents, pageBusy
 };

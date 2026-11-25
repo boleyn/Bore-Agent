@@ -21,6 +21,7 @@ import (
 )
 
 var version = "development"
+var stateDirName = "ai.studio.local-device"
 
 // devLoopback retains compatibility with the existing packaging flag.
 var devLoopback string
@@ -109,7 +110,7 @@ func main() {
 		if err != nil {
 			log.Fatal("cannot resolve private configuration directory")
 		}
-		*directory = filepath.Join(config, "FastGPT", "local-device")
+		*directory = filepath.Join(config, stateDirName)
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()

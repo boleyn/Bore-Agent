@@ -13,7 +13,8 @@ import (
 
 type systemVault struct{ account string }
 
-const keychainService = "tech.asiainfo.agenticops.local-device"
+var keychainService = "ai.studio.local-device"
+var useFileVault = ""
 
 // This connector uses the macOS login keychain. Background platform workers
 // must never open SecurityAgent dialogs on an unattended computer.
@@ -24,7 +25,11 @@ var disableKeychainDialogs = sync.OnceValue(func() error {
 	return nil
 })
 
-func newVault(_ string, account string) (vault, error) {
+func newVault(directory string, account string) (vault, error) {
+	if useFileVault == "1" {
+		copyBytes := func(value []byte) ([]byte, error) { return append([]byte(nil), value...), nil }
+		return newFileVault(directory, account, copyBytes, copyBytes)
+	}
 	if err := disableKeychainDialogs(); err != nil {
 		return nil, err
 	}
